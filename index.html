@@ -1,0 +1,496 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Gamia Ai | AI Mini-Game Platform</title>
+    <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 64 64'%3E%3Crect width='64' height='64' rx='14' fill='%23070a12'/%3E%3Cpath d='M32 8l6.5 17.5L56 32l-17.5 6.5L32 56l-6.5-17.5L8 32l17.5-6.5L32 8z' fill='%23a78bfa'/%3E%3Ccircle cx='32' cy='32' r='7' fill='%23ffffff'/%3E%3C/svg%3E" type="image/svg+xml">
+    <link rel="stylesheet" href="style.css?v=20260609-home-intro-v29">
+    <link rel="stylesheet" href="home-orbit-refine.css?v=20260612-progress-rail-v18">
+    <link rel="stylesheet" href="chat-rebuild.css?v=20260612-chat-rebuild-m1">
+    <link rel="stylesheet" href="intro/droi-intro.css?v=20260612-meteor-light-v5">
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&display=swap" rel="stylesheet">
+    <script>
+        window.DROI_INTRO_CONFIG = {
+            meteorSrc: '',
+            logoHTML: 'Gamia <span class="ai">Ai</span>',
+            titleLine1: 'Your Ideas Fall Like Stars.',
+            titleLine2: 'We Catch Them.',
+            inspireSelector: '.inspire-entry-btn',
+            inspireIconSelector: '.inspire-entry-btn .sparkle-icon',
+            swapSelectors: ['.badge', '.title', '.subtitle'],
+            inspireRowSelector: '.inspire-section',
+            restSelectors: ['.header', '.waitlist-form', '.stats'],
+            oncePerSession: false,
+            respectReducedMotion: false,
+            skippable: true
+        };
+    </script>
+    <script src="intro/droi-intro.js?v=20260612-meteor-light-v5"></script>
+</head>
+
+<body>
+    <!-- Spotlight effect layer -->
+    <div class="spotlight-overlay"></div>
+    <div class="spotlight-glow"></div>
+
+    <!-- Cinematic background depth layers -->
+    <div class="bg-layer bg-far"></div>
+    <div class="bg-layer bg-mid"></div>
+    <div class="bg-layer bg-near"></div>
+    <div class="bg-layer bg-left"></div>
+    <div class="scanline"></div>
+    <div class="starlight-container" id="starlightContainer"></div>
+
+    <!-- History Sidebar -->
+    <div class="history-sidebar" id="historySidebar">
+        <button class="sidebar-toggle" id="sidebarToggle">
+            <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"
+                stroke-linecap="round" stroke-linejoin="round">
+                <polyline points="9 18 15 12 9 6"></polyline>
+            </svg>
+        </button>
+        <div class="sidebar-header">
+            <h3>History</h3>
+            <button class="sidebar-close-btn" id="sidebarCloseBtn" aria-label="Close history">
+                <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"
+                    stroke-linecap="round" stroke-linejoin="round">
+                    <line x1="18" y1="6" x2="6" y2="18"></line>
+                    <line x1="6" y1="6" x2="18" y2="18"></line>
+                </svg>
+            </button>
+        </div>
+        <div class="inspire-profile-panel" id="inspireProfilePanel" style="display: none;"></div>
+        <div class="history-list" id="historyList">
+            <!-- Items injected by JS -->
+        </div>
+    </div>
+
+    <div class="home-view" id="homeView">
+    <img
+      class="home-static-background"
+      src="UI desgin/background.png"
+      alt=""
+      aria-hidden="true"
+    >
+    <header class="header">
+        <div class="logo" data-reveal="header">Gamia <span class="ai">Ai</span></div>
+        <div class="header-actions" data-reveal="header">
+            <button type="button" class="frontend-sign-in-btn" id="frontendSignInBtn">Sign in</button>
+            <button type="button" class="settings-btn admin-only" id="settingsBtn" aria-label="Admin AI Config"
+                style="display: none;">
+                <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"
+                    stroke-linecap="round" stroke-linejoin="round">
+                    <circle cx="12" cy="12" r="3"></circle>
+                    <path
+                        d="M12 1v2M12 21v2M4.22 4.22l1.42 1.42M18.36 18.36l1.42 1.42M1 12h2M21 12h2M4.22 19.78l1.42-1.42M18.36 5.64l1.42-1.42">
+                    </path>
+                </svg>
+            </button>
+            <a href="https://discord.com/channels/1493509760866193552/1493509761814102058" class="header-link"
+                target="_blank" rel="noopener noreferrer">
+                DISCORD
+                <svg width="16" height="16" viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg">
+                    <path d="M18 13v6a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h6" stroke="currentColor"
+                        stroke-width="2" stroke-linecap="round" stroke-linejoin="round" />
+                    <polyline points="15 3 21 3 21 9" stroke="currentColor" stroke-width="2" stroke-linecap="round"
+                        stroke-linejoin="round" />
+                    <line x1="10" y1="14" x2="21" y2="3" stroke="currentColor" stroke-width="2" stroke-linecap="round"
+                        stroke-linejoin="round" />
+                </svg>
+            </a>
+        </div>
+    </header>
+
+    <main class="hero">
+        <div class="hero-content">
+        <img
+          class="badge badge-image"
+          data-reveal="badge"
+          src="UI desgin/gamia_exact_pixel_crops_v2/03_private_beta_badge_exact_pixel.png"
+          alt="NOW IN PRIVATE BETA"
+        >
+
+        <h1 class="title" data-reveal="title">
+            Gamia <span class="title-ai-accent">Ai</span> Mini-Game<br>
+            Platform
+        </h1>
+
+        <p class="subtitle" data-reveal="subtitle">
+            Anyone can build a game in 5 min.<br>
+            No code, just imagination.
+        </p>
+
+        <!-- Inspire Me Section -->
+        <div class="inspire-section" data-reveal="inspire">
+            <span class="inspire-text">No idea? Just</span>
+            <button type="button" class="inspire-entry-btn" id="inspireEntryBtn">
+                <svg width="28" height="28" viewBox="0 0 32 32" fill="none" class="sparkle-icon" aria-hidden="true">
+                    <path d="M16 2L19.8 12.2L30 16L19.8 19.8L16 30L12.2 19.8L2 16L12.2 12.2L16 2Z" fill="currentColor"></path>
+                </svg>
+                Inspire Me
+            </button>
+        </div>
+
+        <form class="waitlist-form prompt-mode" id="waitlistForm" data-reveal="prompt">
+            <textarea id="mainInput" class="email-input" placeholder="Describe your game idea..." autocomplete="off"
+                rows="1" maxlength="2000"></textarea>
+            <div id="charCountWarning" class="char-count-warning"></div>
+            <button type="submit" id="mainSubmitBtn" class="submit-btn">Create</button>
+        </form>
+
+
+
+        <button type="button" id="backToPromptBtn" class="back-btn" style="display: none;">
+            <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"
+                stroke-linecap="round" stroke-linejoin="round" style="margin-right: 6px;">
+                <line x1="19" y1="12" x2="5" y2="12"></line>
+                <polyline points="12 19 5 12 12 5"></polyline>
+            </svg>
+            Edit Prompt
+        </button>
+
+        <!-- Progress & Generation Steps Container -->
+        <div class="progress-container" id="progressContainer" style="display: none;">
+            <div class="progress-text" id="progressText">0%</div>
+
+            <div class="progress-bar-bg" id="progressBarBg">
+                <div class="progress-bar-fill" id="progressBarFill"></div>
+            </div>
+
+            <div class="generation-steps" id="generationSteps">
+                <div class="step" id="step1">
+                    <div class="step-icon"></div>
+                    <div class="step-text">Analyzing your prompt...</div>
+                </div>
+                <div class="step" id="step2">
+                    <div class="step-icon"></div>
+                    <div class="step-text">Generating game assets...</div>
+                </div>
+                <div class="step" id="step3">
+                    <div class="step-icon"></div>
+                    <div class="step-text">Building your game...</div>
+                </div>
+            </div>
+
+            <div class="progress-logo">
+                <div class="logo-sparkle"></div>
+                <span>Gamia Ai</span>
+            </div>
+
+            <div class="progress-message" id="progressMessage"
+                style="display: none; margin-top: 1rem; color: var(--accent-yellow); font-size: 0.9rem;">
+                Queued: Due to high demand, rendering is queued. We will bring your creation to life and send it to your
+                email within a week.
+            </div>
+
+        </div>
+
+        <!-- Success State Container -->
+        <div class="success-state-container" id="successStateContainer" style="display: none;">
+            <div class="success-message-large">Your inspiration is in safe hands. We'll reply within 15 business days.
+            </div>
+            <button class="submit-btn new-idea-btn" id="newIdeaBtn">I got a new idea, let's create it!</button>
+        </div>
+
+        <div class="stats" id="statsContainer" data-reveal="stats">
+            <div class="joined-count">
+                <svg width="16" height="16" viewBox="0 0 24 24" fill="#facc15" xmlns="http://www.w3.org/2000/svg">
+                    <circle cx="12" cy="12" r="10" />
+                    <path d="M8 12.5L11 15.5L16 9" stroke="#110f17" stroke-width="2" stroke-linecap="round"
+                        stroke-linejoin="round" />
+                </svg>
+                <span><strong id="joinedCount">842 creators</strong> have joined the early access.</span>
+            </div>
+            <div class="limited-slots">LIMITED TO 1,000 EARLY SLOTS</div>
+        </div>
+        </div>
+
+        <aside class="hero-orbit" aria-hidden="true">
+            <div class="orbit-card">
+                <div class="orbit-rings">
+                    <span class="orbit-ring orbit-ring-one"></span>
+                    <span class="orbit-ring orbit-ring-two"></span>
+                    <span class="orbit-ring orbit-ring-three"></span>
+                    <span class="orbit-core">
+                        <strong>842</strong>
+                        <small>ideas caught</small>
+                    </span>
+                    <span class="orbit-node orbit-node-one"><b>Rogue</b></span>
+                    <span class="orbit-node orbit-node-two"><b>Runner</b></span>
+                    <span class="orbit-node orbit-node-three"><b>Builder</b></span>
+                    <span class="orbit-node orbit-node-four"><b>Racing</b></span>
+                    <span class="orbit-dot orbit-dot-one"></span>
+                    <span class="orbit-dot orbit-dot-two"></span>
+                    <span class="orbit-dot orbit-dot-three"></span>
+                </div>
+                <div class="orbit-caption">
+                    <span>AI game sparks</span>
+                    <strong>around Gamia</strong>
+                </div>
+            </div>
+        </aside>
+    </main>
+
+    <section class="roll-embed-section" id="rollEmbedSection" aria-label="Gamia Ai game roll showcase">
+        <iframe class="roll-embed-frame" id="rollEmbedFrame" src="./showcase/roll/showcase.html?v=20260612-compact-hero-down-v8"
+            title="Gamia Ai game roll showcase" loading="lazy" allowtransparency="true" scrolling="no"></iframe>
+    </section>
+
+    <footer class="footer">
+        <div class="copyright">&copy; 2024 Gamia Ai.</div>
+        <div class="footer-links">
+            <a href="#">PRIVACY POLICY</a>
+            <a href="#">TWITTER</a>
+            <a href="https://discord.com/channels/1493509760866193552/1493509761814102058" target="_blank"
+                rel="noopener noreferrer">DISCORD</a>
+        </div>
+    </footer>
+    </div>
+
+    <!-- Inspire Conversational View (Hidden by default) -->
+    <div class="inspire-view" id="inspireView" style="display: none;">
+        <div class="chat-header">
+            <button type="button" class="chat-close-btn" id="chatCloseBtn">
+                <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"
+                    stroke-linecap="round" stroke-linejoin="round">
+                    <line x1="18" y1="6" x2="6" y2="18"></line>
+                    <line x1="6" y1="6" x2="18" y2="18"></line>
+                </svg>
+            </button>
+            <span>Gamia Ai Assistant</span>
+        </div>
+
+        <div class="chat-history" id="chatHistory">
+            <!-- Chat messages will be injected here -->
+        </div>
+
+        <aside class="chat-profile-sidebar" id="chatProfileSidebar" style="display: none;" aria-label="Inspiration profile"></aside>
+
+        <div class="chat-options-container" id="chatOptionsContainer" style="display: none;">
+            <div class="chat-options-list" id="chatOptionsList">
+                <!-- Option capsules injected here -->
+            </div>
+            <div class="chat-options-footer">
+                <button class="quick-more-btn" id="chatMoreBtn" type="button">
+                    <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"
+                        stroke-linecap="round" stroke-linejoin="round">
+                        <polyline points="1 4 1 10 7 10"></polyline>
+                        <polyline points="23 20 23 14 17 14"></polyline>
+                        <path d="M20.49 9A9 9 0 0 0 5.64 5.64L1 10m22 4l-4.64 4.36A9 9 0 0 1 3.51 15"></path>
+                    </svg>
+                    More options
+                </button>
+            </div>
+        </div>
+
+        <div class="model-switch-notice" id="modelSwitchNotice" aria-live="polite" style="display: none;"></div>
+
+        <div class="chat-input-wrapper">
+            <div class="chat-input-bar unified-pill">
+                <div class="chat-attachment-tray" id="chatAttachmentTray" aria-live="polite" style="display: none;">
+                </div>
+                <div class="chat-composer-row">
+                    <button type="button" class="icon-btn plus-btn" id="chatAttachBtn" aria-label="Add files or images">
+                        <svg xmlns="http://www.w3.org/2000/svg" width="20" height="20" viewBox="0 0 24 24" fill="none"
+                            stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                            <line x1="12" y1="5" x2="12" y2="19"></line>
+                            <line x1="5" y1="12" x2="19" y2="12"></line>
+                        </svg>
+                    </button>
+                    <input type="file" id="chatFileInput" class="chat-file-input" multiple
+                        accept="image/*,.pdf,.txt,.md,.json,.csv,.doc,.docx,.ppt,.pptx,.xls,.xlsx,.zip,.rar,.7z,.tar,.gz,.tgz,application/zip,application/x-zip-compressed,application/vnd.rar,application/x-rar-compressed,application/x-7z-compressed,application/x-tar,application/gzip,application/x-gzip">
+                    <div id="chatCharCount" class="chat-char-count">0/3000</div>
+                    <textarea id="chatInputField" class="chat-real-input" placeholder="Ask anything"
+                        autocomplete="off" maxlength="3000" rows="1"></textarea>
+                    <div class="right-actions">
+                        <div class="model-selector-wrap input-model-selector">
+                            <button type="button" class="model-selector" id="modelSelector" aria-haspopup="listbox"
+                                aria-expanded="false">
+                                <span class="model-icon" id="activeModelIcon" aria-hidden="true"></span>
+                                <span class="model-name" id="activeModelName">GPT 5.5</span>
+                                <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor"
+                                    stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round">
+                                    <polyline points="6 9 12 15 18 9"></polyline>
+                                </svg>
+                            </button>
+                            <div class="model-dropdown" id="modelDropdown" role="listbox" style="display: none;">
+                                <div class="model-dropdown-list" id="modelDropdownList"></div>
+                                <button type="button" class="model-config-link admin-only" id="modelConfigLink"
+                                    style="display: none;">Admin config...</button>
+                            </div>
+                        </div>
+                        <button type="button" class="icon-btn mic-btn" id="chatMicBtn" aria-label="Voice input"
+                            aria-pressed="false" title="Voice input">
+                            <svg xmlns="http://www.w3.org/2000/svg" width="18" height="18" viewBox="0 0 24 24"
+                                fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"
+                                stroke-linejoin="round">
+                                <path d="M12 1a3 3 0 0 0-3 3v8a3 3 0 0 0 6 0V4a3 3 0 0 0-3-3z"></path>
+                                <path d="M19 10v2a7 7 0 0 1-14 0v-2"></path>
+                                <line x1="12" y1="19" x2="12" y2="23"></line>
+                                <line x1="8" y1="23" x2="16" y2="23"></line>
+                            </svg>
+                        </button>
+                        <button type="button" id="chatSendBtn" class="chat-send-btn black-circle" aria-label="Send"
+                            title="Send message">
+                            <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor"
+                                stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round">
+                                <path d="M22 2 11 13"></path>
+                                <path d="m22 2-7 20-4-9-9-4 20-7z"></path>
+                            </svg>
+                        </button>
+                    </div>
+                </div>
+            </div>
+            <div class="chat-upload-limit-note" id="chatUploadLimitNote" aria-live="polite">
+                ZIP/RAR/7Z/TAR archives are supported. Folder uploads and total attachments are limited to 32MB.
+            </div>
+        </div>
+    </div>
+
+    <!-- Email Collection Modal -->
+    <div class="modal-overlay" id="emailModal">
+        <div class="modal-content">
+            <h2 class="modal-title">Apologies for the delay</h2>
+            <p class="modal-text">Please provide your personal email, and we will send the generated game to your inbox~
+            </p>
+            <form id="emailSubmitForm" class="email-modal-form">
+                <input type="email" id="modalEmailInput" class="modal-email-input"
+                    placeholder="Enter your email address..." required autocomplete="email">
+                <button type="submit" id="modalEmailSubmitBtn" class="submit-btn modal-submit-btn">Send</button>
+            </form>
+            <button class="modal-close-btn" id="closeEmailModalBtn">Skip
+                for now</button>
+        </div>
+    </div>
+
+    <!-- Success Modal -->
+    <div class="modal-overlay" id="successModal">
+        <div class="modal-content">
+            <div class="modal-icon">OK</div>
+            <h2 class="modal-title">Inspiration Received!</h2>
+            <p class="modal-text">We've got your creative spark. We will bring your idea to life and send it to your
+                provided email within 15 days~</p>
+            <button class="modal-close-btn" id="closeModalBtn">Got it!</button>
+        </div>
+    </div>
+
+    <!-- Admin AI Settings Modal -->
+    <div class="modal-overlay" id="settingsModal">
+        <div class="modal-content settings-panel">
+            <div class="settings-header">
+                <div>
+                    <h2 class="modal-title">Admin AI Config</h2>
+                    <p class="settings-subtitle">Platform API routing for enabled models. This panel is only visible to
+                        admins.</p>
+                </div>
+                <button type="button" class="settings-close-btn" id="closeSettingsBtn" aria-label="Close settings">
+                    <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor"
+                        stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round">
+                        <line x1="18" y1="6" x2="6" y2="18"></line>
+                        <line x1="6" y1="6" x2="18" y2="18"></line>
+                    </svg>
+                </button>
+            </div>
+
+            <div class="settings-status" id="settingsStatus">Manage platform providers and enabled models.</div>
+
+            <div class="settings-layout">
+                <div class="provider-list" id="providerList"></div>
+
+                <div class="provider-editor">
+                    <div class="field-row">
+                        <label for="providerEnabled">Provider</label>
+                        <label class="toggle-row">
+                            <input type="checkbox" id="providerEnabled">
+                            <span>Enabled</span>
+                        </label>
+                    </div>
+
+                    <label class="settings-field">
+                        <span>API Key</span>
+                        <input type="password" id="providerApiKey" placeholder="sk-..." autocomplete="off">
+                    </label>
+
+                    <label class="settings-field">
+                        <span>Endpoint</span>
+                        <input type="url" id="providerBaseUrl" placeholder="https://api.openai.com/v1">
+                    </label>
+
+                    <div class="settings-grid">
+                        <label class="settings-field">
+                            <span>Model</span>
+                            <select id="providerModel"></select>
+                        </label>
+                        <label class="settings-field">
+                            <span>Reasoning</span>
+                            <select id="providerReasoning">
+                                <option value="none">None</option>
+                                <option value="low">Low</option>
+                                <option value="medium">Medium</option>
+                                <option value="high">High</option>
+                            </select>
+                        </label>
+                    </div>
+
+                    <label class="settings-field" id="customModelField" style="display: none;">
+                        <span>Custom model name</span>
+                        <input type="text" id="customModelName" placeholder="llama3.1:70b">
+                    </label>
+
+                    <div class="usage-panel">
+                        <div>
+                            <span class="usage-label">Total tokens</span>
+                            <strong id="usageTotalTokens">0</strong>
+                        </div>
+                        <div>
+                            <span class="usage-label">Estimated cost</span>
+                            <strong id="usageEstimatedCost">$0.00</strong>
+                        </div>
+                    </div>
+                    <div class="usage-model-list" id="usageByModelList"></div>
+
+                    <div class="settings-actions">
+                        <button type="button" class="submit-btn" id="saveSettingsBtn">Save config</button>
+                        <button type="button" class="modal-close-btn secondary-action" id="testConnectionBtn">Test
+                            connection</button>
+                        <button type="button" class="modal-close-btn secondary-action" id="clearProviderBtn">Clear
+                            key</button>
+                    </div>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <!-- User Account Notice Modal -->
+    <div class="modal-overlay" id="userAuthModal">
+        <div class="modal-content admin-auth-panel">
+            <div class="modal-icon">Account</div>
+            <h2 class="modal-title">Sign In Unavailable</h2>
+            <p class="modal-text" id="userAuthMessage">User account sign-in is not configured yet.</p>
+            <div class="admin-auth-actions">
+                <button type="button" class="submit-btn" id="retryUserAuthBtn">Try Again</button>
+                <button type="button" class="modal-close-btn secondary-action" id="closeUserAuthBtn">Close</button>
+            </div>
+        </div>
+    </div>
+
+    <!-- Admin Auth Notice Modal -->
+    <div class="modal-overlay" id="adminAuthModal">
+        <div class="modal-content admin-auth-panel">
+            <div class="modal-icon">Admin</div>
+            <h2 class="modal-title">Admin Config Unavailable</h2>
+            <p class="modal-text" id="adminAuthMessage">Admin model configuration login is not available in this frontend build.</p>
+            <div class="admin-auth-actions">
+                <button type="button" class="submit-btn" id="retryAdminAuthBtn">Try Again</button>
+                <button type="button" class="modal-close-btn secondary-action" id="closeAdminAuthBtn">Close</button>
+            </div>
+        </div>
+    </div>
+
+    <script src="script.js?v=20260612-prompt-collapse-v16"></script>
+    <script type="module" src="src-chat/index.js?v=20260612-chat-rebuild-m2"></script>
+</body>
+
+</html>

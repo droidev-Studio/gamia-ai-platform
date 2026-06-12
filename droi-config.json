@@ -1,0 +1,7 @@
+{
+  "appId": "droi-ai-direct-frontend",
+  "frontendContractVersion": "ai-direct-v1",
+  "requiredBackendService": "droi-ai-direct-backend",
+  "requiredGenerationMode": "ai_direct",
+  "apiBaseUrl": ""
+}

@@ -1,0 +1,82 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Droi AI | AI Game Roll 01</title>
+    <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 64 64'%3E%3Crect width='64' height='64' rx='14' fill='%23070a12'/%3E%3Cpath d='M32 8l6.5 17.5L56 32l-17.5 6.5L32 56l-6.5-17.5L8 32l17.5-6.5L32 8z' fill='%23a78bfa'/%3E%3Ccircle cx='32' cy='32' r='7' fill='%23ffffff'/%3E%3C/svg%3E" type="image/svg+xml">
+    <link rel="stylesheet" href="showcase.css?v=20260612-compact-hero-down-v8">
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800;900&display=swap" rel="stylesheet">
+</head>
+
+<body data-asset-model="gpt-image-2">
+    <div class="spotlight-overlay"></div>
+    <div class="spotlight-glow"></div>
+    <div class="bg-layer bg-far"></div>
+    <div class="bg-layer bg-mid"></div>
+    <div class="bg-layer bg-near"></div>
+    <div class="bg-layer bg-left"></div>
+    <div class="scanline"></div>
+    <div class="starlight-container" id="starlightContainer"></div>
+
+    <header class="roll-header" aria-label="Showcase navigation">
+        <a class="brand" href="index.html">Droi AI</a>
+        <nav class="roll-nav" aria-label="Roll controls">
+            <span>AI GAME ROLL 01</span>
+            <a href="index.html">HOME</a>
+            <a href="https://discord.com/channels/1493509760866193552/1493509761814102058" target="_blank" rel="noopener noreferrer">DISCORD</a>
+        </nav>
+    </header>
+
+    <main class="showcase-shell" id="rollView">
+        <section class="cover-panel" aria-labelledby="showcaseTitle">
+            <div class="roll-meta">
+                <span>ROLL 01</span>
+                <span>GENERATED GAME ARCHIVE</span>
+                <span id="activeIndexLabel">01 / 05</span>
+            </div>
+
+            <h1 id="showcaseTitle" class="roll-title">AI-MADE<br>GAMES</h1>
+            <p class="roll-subtitle">Playable worlds generated from prompts.</p>
+
+            <div class="directory-block">
+                <div class="directory-label">
+                    <span>BUILD QUEUE</span>
+                    <span>01-08 GENERATED WORLDS</span>
+                </div>
+                <div class="directory-topline">
+                    <span>NO.</span>
+                    <span>BUILD</span>
+                    <span>GAME TITLE</span>
+                    <span>TYPE</span>
+                </div>
+                <div class="game-directory" id="gameDirectory" role="listbox" aria-label="Generated game directory"></div>
+                <p class="directory-hint" id="directoryHint">Hover to preview. Click to switch selection. Open details from the game list.</p>
+            </div>
+        </section>
+
+        <section class="roll-film-panel" aria-label="Generated game roll">
+            <div class="film-topline">
+                <span>DROI-26-R1 · GPT-IMAGE-2 · 05 EXP</span>
+                <span id="hoverStatus">NOW SELECTED · NEON DUNGEON SURVIVOR</span>
+            </div>
+            <div class="film-rail" id="filmRail" role="listbox" aria-label="Generated game thumbnails"></div>
+            <div class="roll-dots" id="rollDots" aria-hidden="true"></div>
+            <div class="film-footer">
+                <span>ACTIVE FRAME LOCKED BY CLICK</span>
+                <span id="selectedLabel">01 / 05</span>
+            </div>
+        </section>
+    </main>
+
+    <main class="details-stack" id="detailView" aria-label="Generated game details">
+        <div id="detailSections"></div>
+    </main>
+
+    <button class="back-roll-btn floating-roll-btn" type="button" id="backToRollBtn">Back to Menu</button>
+
+    <script src="showcase.js?v=20260612-compact-hero-down-v8"></script>
+</body>
+
+</html>
