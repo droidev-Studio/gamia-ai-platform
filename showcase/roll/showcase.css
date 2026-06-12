@@ -1802,6 +1802,22 @@ body.is-in-detail .floating-roll-btn {
         align-self: start;
     }
 
+    html.is-embedded-page-flow .focus-dots {
+        position: fixed;
+        left: 50%;
+        right: auto;
+        bottom: clamp(26px, 5vh, 44px);
+        z-index: 80;
+        transform: translateX(-50%);
+        grid-auto-flow: column;
+        grid-auto-columns: auto;
+        justify-content: center;
+        align-content: center;
+        gap: 0.55rem;
+        min-width: 0;
+        pointer-events: auto;
+    }
+
     html.is-embedded-page-flow .roll-film-panel {
         display: flex !important;
     }
