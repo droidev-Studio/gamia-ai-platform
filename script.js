@@ -526,6 +526,7 @@ document.addEventListener('DOMContentLoaded', () => {
     const AI_STORAGE_KEY = 'droi_ai_model_config';
     const ADMIN_SESSION_KEY = 'droi_ai_admin_session';
     const FRONTEND_SESSION_KEY = 'droi_frontend_user_session';
+    const INTRO_SKIP_ON_AUTH_KEY = 'gamia_skip_intro_once_until';
     const PAGE_DIAGNOSTIC_KEY = 'droi_page_diagnostics_v1';
     const PAGE_DIAGNOSTIC_WINDOW_MS = 5 * 60 * 1000;
     const APP_SCRIPT_BUILD = '20260611-dark-timeline-edit-only';
@@ -1043,6 +1044,14 @@ document.addEventListener('DOMContentLoaded', () => {
         }));
     }
 
+    function markIntroSkippedForAuthReturn() {
+        try {
+            localStorage.setItem(INTRO_SKIP_ON_AUTH_KEY, String(Date.now() + 5 * 60 * 1000));
+        } catch (error) {
+            // Best effort: login should still work if localStorage is unavailable.
+        }
+    }
+
     function updateFrontendSignInUI() {
         if (!frontendSignInBtn) return;
         const session = loadUserAccountSessionCache();
@@ -1117,6 +1126,7 @@ document.addEventListener('DOMContentLoaded', () => {
             return;
         }
 
+        markIntroSkippedForAuthReturn();
         const returnTo = encodeURIComponent(window.location.href);
         window.location.href = apiUrl(`${session.loginUrl || '/auth/user/google'}?returnTo=${returnTo}`);
     }

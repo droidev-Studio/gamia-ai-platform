@@ -18,21 +18,30 @@
   };
 
   var cfg = Object.assign({}, DEFAULTS, window.DROI_INTRO_CONFIG || {});
+  var skipUntil = 0;
+  var skipStorageKey = cfg.skipStorageKey || "gamia_skip_intro_once_until";
+  try {
+    skipUntil = Number(localStorage.getItem(skipStorageKey) || 0);
+    if (skipUntil) localStorage.removeItem(skipStorageKey);
+  } catch (error) {
+    skipUntil = 0;
+  }
   var forceMotion = cfg.respectReducedMotion === false;
   if (forceMotion) document.documentElement.classList.add("droi-force-intro-motion");
   var reduced = !forceMotion && window.matchMedia("(prefers-reduced-motion: reduce)").matches;
   var played = cfg.oncePerSession && sessionStorage.getItem("droiIntroPlayed");
+  var skippedByAuthReturn = skipUntil && Date.now() < skipUntil;
   var ALL_SELECTORS = cfg.swapSelectors
     .concat([cfg.inspireRowSelector])
     .concat(cfg.restSelectors);
 
   var hideStyle = document.createElement("style");
-  hideStyle.textContent = reduced || played
+  hideStyle.textContent = reduced || played || skippedByAuthReturn
     ? ""
     : ALL_SELECTORS.join(",") + "{opacity:0 !important}";
   document.head.appendChild(hideStyle);
 
-  if (reduced || played) {
+  if (reduced || played || skippedByAuthReturn) {
     hideStyle.remove();
     return;
   }
