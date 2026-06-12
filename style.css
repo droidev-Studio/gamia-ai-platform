@@ -2033,7 +2033,7 @@ body.game-edit-workspace-active .chat-history {
 .roll-embed-section {
     position: relative;
     z-index: 10;
-    --roll-embed-page-count: 2;
+    --roll-embed-page-count: 3;
     width: 100%;
     height: calc(var(--roll-embed-page-count, 6) * 100vh);
     min-height: calc(var(--roll-embed-page-count, 6) * 100vh);

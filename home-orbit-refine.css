@@ -2450,7 +2450,7 @@ body.gamia-home-active:not(.game-edit-workspace-active) .home-view .hero::before
 body.gamia-home-active:not(.game-edit-workspace-active) .starlight-container {
   display: block !important;
   visibility: visible !important;
-  opacity: 0.56 !important;
+  opacity: 0.42 !important;
   position: fixed;
   inset: 0;
   z-index: 1;
@@ -2471,10 +2471,12 @@ body.gamia-home-active:not(.game-edit-workspace-active) .starlight {
   visibility: visible !important;
   opacity: 0;
   border-radius: 999px;
-  background: rgba(255, 255, 255, 0.86);
+  max-width: 0.5px !important;
+  max-height: 0.5px !important;
+  background: rgba(255, 255, 255, 0.76);
   box-shadow:
-    0 0 3px rgba(255, 255, 255, 0.52),
-    0 0 7px rgba(132, 185, 255, 0.18);
+    0 0 1.4px rgba(255, 255, 255, 0.34),
+    0 0 3px rgba(132, 185, 255, 0.12);
   animation-name: gamiaSoftStarPulse !important;
   animation-duration: var(--twinkle-duration, 5.8s) !important;
   animation-delay: var(--twinkle-delay, 0s) !important;
@@ -2689,7 +2691,7 @@ body.gamia-scene-active:not(.game-edit-workspace-active) .roll-embed-frame {
 body.gamia-scene-active:not(.game-edit-workspace-active) .starlight-container {
   display: block !important;
   visibility: visible !important;
-  opacity: 0.56 !important;
+  opacity: 0.42 !important;
   animation-duration: 52s !important;
 }
 
@@ -2714,7 +2716,7 @@ body.gamia-scene-active:not(.game-edit-workspace-active) .starlight-container::a
 
 @media (max-width: 768px), (hover: none), (pointer: coarse) {
   body.gamia-scene-active:not(.game-edit-workspace-active) .starlight-container {
-    opacity: 0.34 !important;
+    opacity: 0.24 !important;
   }
 }
 
@@ -2797,13 +2799,13 @@ html:not(.droi-force-intro-motion) body.gamia-scene-active::before {
   }
 }
 
-/* ===== Compact showcase spacing: avoid an empty third viewport ===== */
+/* ===== Compact showcase spacing: keep all three showcase pages visible ===== */
 @media (max-width: 1180px), (hover: none) and (pointer: coarse) and (max-width: 1366px) {
   .home-view .roll-embed-section {
-    --roll-embed-page-count: 2 !important;
-    height: calc(2 * 100dvh) !important;
-    min-height: calc(2 * 100dvh) !important;
-    max-height: calc(2 * 100dvh) !important;
+    --roll-embed-page-count: 3;
+    height: calc(var(--roll-embed-page-count, 3) * 100dvh) !important;
+    min-height: calc(var(--roll-embed-page-count, 3) * 100dvh) !important;
+    max-height: none !important;
   }
 
   .home-view .roll-embed-frame {

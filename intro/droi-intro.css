@@ -620,23 +620,52 @@ body:not(.game-edit-workspace-active) .history-sidebar:not(.open) .sidebar-toggl
 }
 
 @media (max-width: 560px) {
+  #droi-intro {
+    --di-title-font: clamp(29px, 7.25vw, 34px);
+    --di-title-line: 1.03;
+    --di-title-letter: 0;
+    --di-title-w: calc(100vw - 20px);
+  }
+
   .droi-intro__logo {
     top: var(--di-logo-top);
     left: var(--di-logo-left);
   }
 
   .droi-intro__title {
-    width: min(calc(100vw - 36px), var(--di-title-w));
+    width: var(--di-title-w);
   }
 
   .droi-intro__line {
-    font-size: min(var(--di-title-font), 48px);
-    line-height: 0.98;
+    font-size: var(--di-title-font);
+    line-height: var(--di-title-line);
+    letter-spacing: var(--di-title-letter);
     white-space: normal;
+  }
+
+  .droi-intro__line--one {
+    max-width: min(360px, calc(100vw - 20px));
+  }
+
+  .droi-intro__line--two {
+    max-width: min(340px, calc(100vw - 20px));
   }
 
   .droi-reveal--soft {
     opacity: 0.74 !important;
+  }
+}
+
+@media (min-width: 561px) and (max-width: 820px) {
+  #droi-intro {
+    --di-title-font: clamp(38px, 6.3vw, 52px);
+    --di-title-line: 1.02;
+    --di-title-letter: 0;
+    --di-title-w: calc(100vw - 56px);
+  }
+
+  .droi-intro__title {
+    width: var(--di-title-w);
   }
 }
 

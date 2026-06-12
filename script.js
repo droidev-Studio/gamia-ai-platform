@@ -540,7 +540,7 @@ document.addEventListener('DOMContentLoaded', () => {
     const FRONTEND_CONTRACT_VERSION = 'ai-direct-v1';
     const REQUIRED_BACKEND_SERVICE = 'droi-ai-direct-backend';
     const REQUIRED_GENERATION_MODE = 'ai_direct';
-    const AI_DIRECT_PUBLIC_API_BASE = '';
+    const AI_DIRECT_PUBLIC_API_BASE = 'https://droi-ai-direct-backend-585034669241.europe-west3.run.app';
     const isLocalHost = ['127.0.0.1', 'localhost'].includes(window.location.hostname);
     let API_BASE_URL = window.DROI_API_BASE || '';
     window.__DROI_RUNTIME_CONFIG = window.__DROI_RUNTIME_CONFIG || {
@@ -900,7 +900,7 @@ document.addEventListener('DOMContentLoaded', () => {
 
     function normalizeRollEmbedPageCount(pageCount) {
         const count = Math.max(1, Number(pageCount) || 1);
-        return isCompactRollEmbedViewport() ? Math.min(count, 2) : count;
+        return isCompactRollEmbedViewport() ? Math.max(3, count) : count;
     }
 
     function syncRollEmbedViewport() {
@@ -946,11 +946,11 @@ document.addEventListener('DOMContentLoaded', () => {
     if (rollEmbedFrame) {
         configureRollEmbedApiBase();
         if (rollEmbedSection) {
-            rollEmbedSection.style.setProperty('--roll-embed-page-count', '2');
+            rollEmbedSection.style.setProperty('--roll-embed-page-count', '3');
         }
         rollEmbedFrame.addEventListener('load', () => {
             if (rollEmbedSection) {
-                rollEmbedSection.style.setProperty('--roll-embed-page-count', '2');
+                rollEmbedSection.style.setProperty('--roll-embed-page-count', '3');
             }
             syncRollEmbedViewport();
         });
@@ -14129,23 +14129,23 @@ HTML5 Constraints: Canvas, playable, responsive, no external dependencies, singl
         if (!container) return;
         container.innerHTML = '';
 
-        const count = window.matchMedia('(max-width: 760px)').matches ? 42 : 68;
+        const count = window.matchMedia('(max-width: 760px)').matches ? 32 : 52;
 
         for (let i = 0; i < count; i += 1) {
             const star = document.createElement('div');
             star.className = 'starlight';
 
-            const size = Math.random() * 0.65 + 0.45;
+            const size = Math.random() * 0.26 + 0.22;
             star.style.width = `${size}px`;
             star.style.height = `${size}px`;
 
-            const color = 'rgba(255, 255, 255, 0.86)';
+            const color = 'rgba(255, 255, 255, 0.78)';
             star.style.background = color;
-            star.style.boxShadow = `0 0 ${Math.max(2.4, size * 4.2)}px rgba(255,255,255,0.50), 0 0 ${Math.max(5, size * 7)}px rgba(132,185,255,0.18)`;
+            star.style.boxShadow = `0 0 ${Math.max(1.2, size * 3.1)}px rgba(255,255,255,0.34), 0 0 ${Math.max(2.4, size * 5.2)}px rgba(132,185,255,0.12)`;
             star.style.left = `${Math.random() * 100}vw`;
             star.style.top = `${Math.random() * 100}vh`;
-            star.style.setProperty('--star-peak-opacity', `${(Math.random() * 0.28 + 0.42).toFixed(2)}`);
-            star.style.setProperty('--star-min-opacity', `${(Math.random() * 0.05 + 0.04).toFixed(2)}`);
+            star.style.setProperty('--star-peak-opacity', `${(Math.random() * 0.18 + 0.24).toFixed(2)}`);
+            star.style.setProperty('--star-min-opacity', `${(Math.random() * 0.03 + 0.02).toFixed(2)}`);
 
             const duration = Math.random() * 3.2 + 4.6;
             const delay = Math.random() * 7;

@@ -192,14 +192,22 @@
       if (title) {
         var titleRect = title.getBoundingClientRect();
         var titleStyle = getComputedStyle(title);
+        var compactTitleFont = "";
+        if (innerWidth <= 560) {
+          compactTitleFont = clamp(innerWidth * 0.09, 34, 38).toFixed(2) + "px";
+        } else if (innerWidth <= 820) {
+          compactTitleFont = clamp(innerWidth * 0.063, 38, 52).toFixed(2) + "px";
+        }
         root.style.setProperty("--di-title-x", (titleRect.left + titleRect.width / 2) + "px");
         root.style.setProperty("--di-title-top", titleRect.top + "px");
-        root.style.setProperty("--di-title-w", Math.min(innerWidth - 72, Math.max(titleRect.width, innerWidth * 0.72)) + "px");
-        root.style.setProperty("--di-title-font", titleStyle.fontSize);
+        root.style.setProperty("--di-title-w", compactTitleFont
+          ? Math.max(0, innerWidth - (innerWidth <= 560 ? 20 : 56)) + "px"
+          : Math.min(innerWidth - 72, Math.max(titleRect.width, innerWidth * 0.72)) + "px");
+        root.style.setProperty("--di-title-font", compactTitleFont || titleStyle.fontSize);
         root.style.setProperty("--di-title-family", titleStyle.fontFamily);
         root.style.setProperty("--di-title-weight", titleStyle.fontWeight);
-        root.style.setProperty("--di-title-line", titleStyle.lineHeight === "normal" ? "0.94" : titleStyle.lineHeight);
-        root.style.setProperty("--di-title-letter", titleStyle.letterSpacing === "normal" ? "-0.04em" : titleStyle.letterSpacing);
+        root.style.setProperty("--di-title-line", compactTitleFont ? "1.04" : (titleStyle.lineHeight === "normal" ? "0.94" : titleStyle.lineHeight));
+        root.style.setProperty("--di-title-letter", compactTitleFont ? "0" : (titleStyle.letterSpacing === "normal" ? "-0.04em" : titleStyle.letterSpacing));
       }
     }
 
