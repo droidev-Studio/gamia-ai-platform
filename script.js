@@ -4291,8 +4291,12 @@ Treat genre conventions as suggested, not confirmed, unless the user explicitly 
         const shouldShowProfile = inspireProfileState.active || hasSelections || selected || inspireProfileState.recommendations.length;
         const shouldShowGameSpec = getGameSpecSidebarRows().length > 0;
 
+        if (panel) {
+            panel.style.display = 'none';
+            panel.innerHTML = '';
+        }
+
         if (!shouldShowProfile) {
-            if (panel) renderGameSpecSidebar(panel, openSidebar);
             if (chatPanel) {
                 renderGameSpecSidebar(chatPanel, false);
             }
@@ -4300,18 +4304,12 @@ Treat genre conventions as suggested, not confirmed, unless the user explicitly 
             return;
         }
 
-        if (panel) {
-            panel.innerHTML = buildInspireProfileCardHtml({ interactive: false, compact: true });
-            panel.style.display = 'block';
-            bindInspireProfileSidebar(panel);
-        }
         if (chatPanel) {
             chatPanel.innerHTML = buildInspireProfileCardHtml({ interactive: true });
             chatPanel.style.display = 'block';
             bindInspireProfileSidebar(chatPanel);
         }
         if (inspireView) inspireView.classList.add('has-profile-sidebar');
-        if (openSidebar && historySidebar) historySidebar.classList.add('open');
     }
 
     function finalizeAnalysis() {
@@ -13550,59 +13548,12 @@ HTML5 Constraints: Canvas, playable, responsive, no external dependencies, singl
 
     // Local Storage Logic
     function loadHistory() {
-        const historyData = JSON.parse(localStorage.getItem('droi_ai_history') || '[]');
         historyList.innerHTML = '';
-        if (historyData.length === 0) {
-            historyList.innerHTML = '<div style="color: #6b6972; font-size: 0.875rem; text-align: center; margin-top: 2rem;">No previous inspirations found.</div>';
-            return;
-        }
-
-        historyData.forEach((item, index) => {
-            const div = document.createElement('div');
-            div.className = 'history-item';
-            div.innerHTML = `
-                <div class="history-item-date">${new Date(item.timestamp).toLocaleString()}</div>
-                <div class="history-item-text">${item.text}</div>
-                <button class="history-delete-btn" aria-label="Delete history">
-                    <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
-                        <line x1="18" y1="6" x2="6" y2="18"></line>
-                        <line x1="6" y1="6" x2="18" y2="18"></line>
-                    </svg>
-                </button>
-            `;
-
-            // Item click to populate prompt
-            div.addEventListener('click', () => {
-                // ALWAYS reset state first to ensure loop closure
-                resetChat();
-
-                mainInput.value = item.text;
-                historySidebar.classList.remove('open');
-
-                // Trigger auto-resize if applicable
-                mainInput.dispatchEvent(new Event('input'));
-            });
-
-            // Delete button click
-            const deleteBtn = div.querySelector('.history-delete-btn');
-            deleteBtn.addEventListener('click', (e) => {
-                e.stopPropagation(); // Prevent item click
-                historyData.splice(index, 1);
-                localStorage.setItem('droi_ai_history', JSON.stringify(historyData));
-                loadHistory(); // Reload UI
-            });
-
-            historyList.appendChild(div);
-        });
+        historyList.innerHTML = '<div style="color: #6b6972; font-size: 0.875rem; text-align: center; margin-top: 2rem;">Version history appears after a game is generated.</div>';
     }
 
     function saveToHistory(text) {
         if (!text) return;
-        const historyData = JSON.parse(localStorage.getItem('droi_ai_history') || '[]');
-        historyData.unshift({ text: text, timestamp: Date.now() });
-        if (historyData.length > 20) historyData.pop();
-        localStorage.setItem('droi_ai_history', JSON.stringify(historyData));
-        loadHistory();
     }
 
     // Initialize History
