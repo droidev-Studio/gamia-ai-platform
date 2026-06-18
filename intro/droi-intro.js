@@ -35,13 +35,44 @@
     .concat([cfg.inspireRowSelector])
     .concat(cfg.restSelectors);
 
+  function callSkipHook() {
+    if (typeof cfg.shouldSkipIntro !== "function") return false;
+    try {
+      return cfg.shouldSkipIntro() === true;
+    } catch (error) {
+      return false;
+    }
+  }
+
+  function callAsyncSkipHook() {
+    if (typeof cfg.shouldSkipIntroAsync !== "function") return Promise.resolve(false);
+    try {
+      return Promise.resolve(cfg.shouldSkipIntroAsync()).then(function (value) {
+        return value === true;
+      }, function () {
+        return false;
+      });
+    } catch (error) {
+      return Promise.resolve(false);
+    }
+  }
+
+  function introTimeout(ms) {
+    return new Promise(function (resolve) {
+      setTimeout(function () { resolve(false); }, ms);
+    });
+  }
+
+  var skippedByAppState = callSkipHook();
+  var shouldSkipImmediately = reduced || played || skippedByAuthReturn || skippedByAppState;
+
   var hideStyle = document.createElement("style");
-  hideStyle.textContent = reduced || played || skippedByAuthReturn
+  hideStyle.textContent = shouldSkipImmediately
     ? ""
     : ALL_SELECTORS.join(",") + "{opacity:0 !important}";
   document.head.appendChild(hideStyle);
 
-  if (reduced || played || skippedByAuthReturn) {
+  if (shouldSkipImmediately) {
     hideStyle.remove();
     return;
   }
@@ -963,9 +994,22 @@
     rafId = requestAnimationFrame(frame);
   }
 
-  if (document.readyState === "loading") {
-    document.addEventListener("DOMContentLoaded", boot);
-  } else {
-    boot();
+  function startBoot() {
+    if (document.readyState === "loading") {
+      document.addEventListener("DOMContentLoaded", boot);
+    } else {
+      boot();
+    }
   }
+
+  Promise.race([
+    callAsyncSkipHook(),
+    introTimeout(Number(cfg.skipIntroAsyncTimeoutMs || 220))
+  ]).then(function (shouldSkip) {
+    if (shouldSkip) {
+      hideStyle.remove();
+      return;
+    }
+    startBoot();
+  });
 })();

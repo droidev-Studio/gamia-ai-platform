@@ -25,7 +25,61 @@
             restSelectors: ['.header', '.waitlist-form', '.stats'],
             oncePerSession: false,
             respectReducedMotion: false,
-            skippable: true
+            skippable: true,
+            skipIntroAsyncTimeoutMs: 260,
+            shouldSkipIntro: function () {
+                var params = new URLSearchParams(window.location.search || '');
+                if (params.get('restoreWorkspace') === '0' || params.get('noRestoreWorkspace') === '1') return false;
+                if (params.get('restoreWorkspace') === '1' || params.get('workspace') === 'restore') return true;
+                try {
+                    var raw = localStorage.getItem('gamia_active_workspace_hint');
+                    if (!raw) return false;
+                    var hint = JSON.parse(raw);
+                    var updatedAt = Date.parse(hint.updatedAt || hint.createdAt || '');
+                    return Boolean(hint.workspaceId && Number.isFinite(updatedAt) && Date.now() - updatedAt <= 6 * 60 * 60 * 1000);
+                } catch (error) {
+                    return false;
+                }
+            },
+            shouldSkipIntroAsync: function () {
+                var params = new URLSearchParams(window.location.search || '');
+                if (params.get('restoreWorkspace') === '0' || params.get('noRestoreWorkspace') === '1') return Promise.resolve(false);
+                if (!window.indexedDB) return Promise.resolve(false);
+                return new Promise(function (resolve) {
+                    var settled = false;
+                    function done(value) {
+                        if (settled) return;
+                        settled = true;
+                        resolve(Boolean(value));
+                    }
+                    var timeout = setTimeout(function () { done(false); }, 240);
+                    try {
+                        var request = indexedDB.open('droi_workspace_runtime', 1);
+                        request.onerror = function () { clearTimeout(timeout); done(false); };
+                        request.onblocked = function () { clearTimeout(timeout); done(false); };
+                        request.onsuccess = function () {
+                            var db = request.result;
+                            if (!db.objectStoreNames.contains('current')) {
+                                clearTimeout(timeout);
+                                done(false);
+                                return;
+                            }
+                            var tx = db.transaction('current', 'readonly');
+                            var getRequest = tx.objectStore('current').get('activeWorkspaceId');
+                            getRequest.onsuccess = function () {
+                                var active = getRequest.result || {};
+                                var updatedAt = Date.parse(active.updatedAt || '');
+                                clearTimeout(timeout);
+                                done(Boolean(active.workspaceId && Number.isFinite(updatedAt) && Date.now() - updatedAt <= 6 * 60 * 60 * 1000));
+                            };
+                            getRequest.onerror = function () { clearTimeout(timeout); done(false); };
+                        };
+                    } catch (error) {
+                        clearTimeout(timeout);
+                        done(false);
+                    }
+                });
+            }
         };
     </script>
     <script src="intro/droi-intro.js?v=20260612-intro-mobile-title-v8"></script>

@@ -535,7 +535,7 @@ document.addEventListener('DOMContentLoaded', () => {
     const AI_PROFILE_TIMEOUT_MS = 20000;
     const AI_GAME_PLAN_TIMEOUT_MS = 45000;
     const AI_BULLET_PLAN_TIMEOUT_MS = 45000;
-    const AI_DIRECT_GENERATION_TIMEOUT_MS = 330000;
+    const AI_DIRECT_GENERATION_TIMEOUT_MS = 900000;
     const FRONTEND_APP_ID = 'droi-ai-direct-frontend';
     const FRONTEND_CONTRACT_VERSION = 'ai-direct-v1';
     const REQUIRED_BACKEND_SERVICE = 'droi-ai-direct-backend';
@@ -1477,6 +1477,16 @@ document.addEventListener('DOMContentLoaded', () => {
                 error.data.actions || ['retry', 'switch_model', 'check_config', 'manual_queue']
             );
         }
+        if (error && error.code === 'MODEL_REQUEST_ABORTED') {
+            return createAIFlowError(
+                'MODEL_REQUEST_ABORTED',
+                'request_cancelled',
+                'Generation was cancelled',
+                'The generation request was cancelled before completion.',
+                error.technicalMessage || error.message || '',
+                ['retry', 'manual_queue']
+            );
+        }
         const message = String((error && error.message) || error || 'Unknown AI error');
         const lower = message.toLowerCase();
         if (status === 401 || status === 403 || /api key|auth|permission|unauthorized|forbidden/i.test(message)) {
@@ -2174,25 +2184,10 @@ document.addEventListener('DOMContentLoaded', () => {
             '';
         const templateId = normalizeTemplateId(rawTemplateId);
         const mode = String(rawDecision.generationMode || rawDecision.mode || rawDecision.route || '').trim().toLowerCase();
-        const confidence = Math.max(0, Math.min(1, Number(rawDecision.confidence) || (templateId ? 0.86 : 0.72)));
-        if (templateId && templateId !== 'ai_direct') {
-            const status = getTemplateStatus(templateId);
-            if (!status || status.published === false || status.compileReady !== true) return null;
-            return {
-                canAutoGenerate: true,
-                templateId: status.id || status.templateId || templateId,
-                templateLabel: status.label || status.gameType || templateId,
-                templateGenre: status.type || status.gameType || spec.gameType || 'custom-html5-game',
-                generationMode: 'template_assisted',
-                normalizedGameType: spec.gameType || status.gameType || 'Custom HTML5 game',
-                locked: false,
-                confidence,
-                reason: rawDecision.reason || rawDecision.matchReason || 'Selected by the current AI analyze response.',
-                source: 'ai_analyze',
-                candidates: [status]
-            };
-        }
-        if (mode === 'template_assisted' || mode === 'template_compile' || mode === 'template') return null;
+        const confidence = Math.max(0, Math.min(1, Number(rawDecision.confidence) || 0.86));
+        const selectedTemplate = templateId && templateId !== 'ai_direct'
+            ? getTemplateStatus(templateId)
+            : null;
         return {
             canAutoGenerate: true,
             templateId: 'ai_direct',
@@ -2202,9 +2197,17 @@ document.addEventListener('DOMContentLoaded', () => {
             normalizedGameType: spec.gameType || 'Custom HTML5 game',
             locked: false,
             confidence,
-            reason: rawDecision.reason || 'The current AI analyze response did not select a compile-ready backend template.',
+            reason: rawDecision.reason || (mode === 'template_assisted' || mode === 'template_compile' || mode === 'template'
+                ? 'AI analyze suggested a template, but this frontend build is locked to AI Direct full-game generation.'
+                : 'The current AI analyze response will continue through AI Direct full-game generation.'),
             source: 'ai_analyze',
-            candidates: []
+            candidates: [],
+            templateSuggestion: selectedTemplate
+                ? {
+                    templateId: selectedTemplate.id || selectedTemplate.templateId || templateId,
+                    templateLabel: selectedTemplate.label || selectedTemplate.gameType || templateId
+                }
+                : null
         };
     }
 
@@ -2708,6 +2711,7 @@ document.addEventListener('DOMContentLoaded', () => {
     let activeGameCleanups = [];
     let latestGamePlanDraft = '';
     let latestGamePlan = null;
+    let latestGamePlanSummaryMessage = null;
     let latestGenerationPlan = null;
     let latestAIFlowError = null;
     let chatTranscript = [];
@@ -2792,6 +2796,23 @@ document.addEventListener('DOMContentLoaded', () => {
                 value: normalizedItem,
                 confidence,
                 userEdited
+            };
+        }
+        renderInspireProfileSidebar();
+    }
+
+    function clearModuleSelection(key) {
+        if (!key) return;
+        analysisState[key] = null;
+        chatSelections[key] = null;
+        if (!analysisState.modules) analysisState.modules = createModuleStates();
+        if (analysisState.modules[key]) {
+            analysisState.modules[key] = {
+                ...analysisState.modules[key],
+                status: 'missing',
+                value: null,
+                confidence: 0,
+                userEdited: false
             };
         }
         renderInspireProfileSidebar();
@@ -2907,6 +2928,12 @@ document.addEventListener('DOMContentLoaded', () => {
             /\u8d5b\u535a\u57ce\u5e02|\u8d5b\u535a\u90fd\u5e02|\u672a\u6765\u57ce\u5e02|\u9713\u8679\u57ce\u5e02|\u9713\u8679\u8857|\u79d1\u6280\u57ce\u5e02|\u9ad8\u79d1\u6280\u57ce\u5e02|\u90fd\u5e02|\u57ce\u5e02|\u8857\u9053|\u4f01\u4e1a|\u516c\u53f8/.test(text);
     }
 
+    function hasOuterSpacePromptEvidence(prompt) {
+        const text = String(prompt || '');
+        return /\b(outer space|space|lunar|moon|moonbase|moon rover|galaxy|planet|orbital|cosmic|starship|spaceship)\b/i.test(text) ||
+            /\u6708\u7403|\u6708\u4eae|\u592a\u7a7a|\u5b87\u5b99|\u661f\u7403|\u661f\u9645|\u8f68\u9053|\u6708\u7403\u8f66|\u6708\u7403\u5c0f\u8f66/.test(text);
+    }
+
     function hasCoreGameplayPromptEvidence(prompt) {
         const text = String(prompt || '');
         return /\b(auto[-\s]?attack|auto[-\s]?fire|manual|aim|dodge|shoot|slash|tower|defen[cs]e|build|craft|puzzle|solve|lane)\b/i.test(text) ||
@@ -2950,12 +2977,20 @@ document.addEventListener('DOMContentLoaded', () => {
         const selection = getModuleSelection('progressionSystem');
         if (!selection) return;
         const label = normalizeAnswerText(selection.label || selection.value || '');
-        if (label !== normalizeAnswerText('Skill tree')) return;
-        if (hasExplicitSkillTreePromptEvidence(prompt)) return;
-        setModuleSelection('progressionSystem', findOptionByLabel(PROGRESSION_OPTIONS, 'Level-up choices') || PROGRESSION_OPTIONS[0], 'suggested', 0.7, false);
-        recordDiagnostic('analysis-progression-skill-tree-deferred', {
-            reason: 'Skill tree was not explicit in the user prompt; downgraded to first-playable progression.'
-        });
+        if (label === normalizeAnswerText('Skill tree')) {
+            if (hasExplicitSkillTreePromptEvidence(prompt)) return;
+            clearModuleSelection('progressionSystem');
+            recordDiagnostic('analysis-progression-skill-tree-deferred', {
+                reason: 'Skill tree was not explicit in the user prompt; progression left for user confirmation.'
+            });
+            return;
+        }
+        if (label === normalizeAnswerText('Level-up choices') && !hasProgressionPromptEvidence(prompt)) {
+            clearModuleSelection('progressionSystem');
+            recordDiagnostic('analysis-progression-levelup-deferred', {
+                reason: 'Level-up choices were not explicit in the user prompt; progression left for user confirmation.'
+            });
+        }
     }
 
     function applyExplicitPromptOverrides(prompt) {
@@ -2968,7 +3003,7 @@ document.addEventListener('DOMContentLoaded', () => {
         if (/\bfantasy[\s-]?illustration\b|\bbright fantasy\b|\bheroic fantasy\b/i.test(text)) {
             setExplicitPromptSelection('style', findOptionByLabel(ART_STYLES, 'Fantasy Illustration'), 0.97);
         }
-        if (/\bouter space\b|\bspace observatory\b|\bluminous sky observatory\b|\bgalax(y|ies)\b|\bstarship\b|\bcelestial\b/i.test(text)) {
+        if (hasOuterSpacePromptEvidence(text) || /\bouter space\b|\bspace observatory\b|\bluminous sky observatory\b|\bgalax(y|ies)\b|\bstarship\b|\bcelestial\b/i.test(text)) {
             setExplicitPromptSelection('setting', findOptionByLabel(SETTINGS, 'Outer Space'), 0.97);
         }
         if (/\bmanual action combat\b|\bmanual\b.*\b(dodg(e|es|ing)|shoot(s|ing)?|attack|combat)\b|\b(move|pilot(s|ing)?)\b.*\b(dodg(e|es|ing)|shoot(s|ing)?|attack)\b/i.test(text)) {
@@ -3031,7 +3066,7 @@ document.addEventListener('DOMContentLoaded', () => {
 
         matchLocalPool('setting', normalized, SETTINGS, 'desc');
         if (!getModuleSelection('setting')) {
-            if (/\bspace|galaxy|star|spaceship|ship|orbital|planet|alien\b/i.test(text)) {
+            if (hasOuterSpacePromptEvidence(text) || /\bspace|galaxy|star|spaceship|ship|orbital|planet|alien\b/i.test(text)) {
                 setPromptMatchedSelection('setting', findOptionByLabel(SETTINGS, 'Outer Space'), 0.82);
             } else if (hasConfirmedCyberpunkSettingPromptEvidence(text)) {
                 setPromptMatchedSelection('setting', findOptionByLabel(SETTINGS, 'Cyberpunk City'), 0.82);
@@ -3193,6 +3228,7 @@ document.addEventListener('DOMContentLoaded', () => {
         clearAIRecommendationSnapshot();
         latestGamePlan = null;
         latestGamePlanDraft = '';
+        latestGamePlanSummaryMessage = null;
     }
 
     function startGuidedGameSpecWizard(options = {}) {
@@ -3345,6 +3381,14 @@ document.addEventListener('DOMContentLoaded', () => {
         resetExecutionTimeline();
         pendingAnalysisInstructions = [];
         queuedGenerationInstructions = [];
+        chatSelections = createEmptySelections();
+        chatShown = createChatTracking(() => new Set());
+        chatCurrent = createChatTracking(() => []);
+        savedPrompt = redactSensitiveText(prompt || '');
+        latestGamePlan = null;
+        latestGamePlanDraft = '';
+        latestGamePlanSummaryMessage = null;
+        latestGenerationPlan = null;
 
         analysisState.active = true;
         analysisState.processing = true;
@@ -3643,7 +3687,7 @@ document.addEventListener('DOMContentLoaded', () => {
         if (found) setModuleSelection(key, found, 'confirmed', 0.8, false);
     }
 
-    function withTimeout(promise, timeoutMs, phase = 'Model call') {
+    function withTimeout(promise, timeoutMs, phase = 'Model call', onTimeout = null) {
         let timeoutId = null;
         return Promise.race([
             Promise.resolve(promise).finally(() => {
@@ -3652,6 +3696,16 @@ document.addEventListener('DOMContentLoaded', () => {
             new Promise((_, reject) => {
                 timeoutId = setTimeout(() => {
                     recordDiagnostic('timeout', { phase, ms: timeoutMs });
+                    if (typeof onTimeout === 'function') {
+                        try {
+                            onTimeout();
+                        } catch (error) {
+                            recordDiagnostic('timeout-abort-failed', {
+                                phase,
+                                message: error.message || String(error)
+                            });
+                        }
+                    }
                     reject(new Error(`${phase} timed out after ${timeoutMs}ms`));
                 }, timeoutMs);
             })
@@ -3678,7 +3732,7 @@ Use this shape:
   },
   "background": string|null,
   "missingFields": string[],
-  "generationDecision": {"generationMode": "ai_direct|template_assisted", "templateId": string|null, "confidence": number, "reason": string},
+  "generationDecision": {"generationMode": "ai_direct", "templateId": null, "confidence": number, "reason": string},
   "fieldSuggestions": {
     "type": {"options": string[], "recommendedIndex": number|null, "recommendedValue": string|null, "reason": string},
     "style": {"options": string[], "recommendedIndex": number|null, "recommendedValue": string|null, "reason": string},
@@ -3701,7 +3755,7 @@ AI direct generation:
 - Treat "no 3D", "without 3D", "avoid 3D", "不要 3D", and "不需要 3D" as a 2D generation constraint, not as a 3D request or 3D art style.
 - If the user explicitly asks to generate a 3D game, 3D world, 3D model game, or Three.js project, set capability.supported=false with blockedReasons including "3D generation is not available yet".
 - Preserve the requested gameType as ordinary GameSpec text. It is an input hint, not a gate.
-- generationDecision is optional. If you select template_assisted, templateId must exactly match one templateId from availableGameTemplates. If no listed template clearly fits, return generationMode="ai_direct" and templateId=null.
+- generationDecision is optional. If returned, it must use generationMode="ai_direct" and templateId=null. Do not select template_assisted or any backend template route in this product build.
 - fieldSuggestions is optional. Only include a Recommended candidate when it is genuinely based on the user's prompt and extracted GameSpec.
 - Use these fieldSuggestions keys exactly: type, style, setting, coreGameplay, playerGoal, mainChallenge, progressionSystem, difficultyLevel.
 - If unsure for a field, set recommendedIndex to null and recommendedValue to null for that field.
@@ -3721,7 +3775,7 @@ Treat genre conventions as suggested, not confirmed, unless the user explicitly 
                             progression: PROGRESSION_OPTIONS.map(item => item.value),
                             difficulty: DIFFICULTY_OPTIONS.map(item => item.value)
                         },
-                        availableGameTemplates: getAvailableGameTemplatesForAI().filter(item => item && item.published !== false && item.compileReady === true),
+                        availableGameTemplates: [],
                         requestContext: buildAIRequestContext(prompt)
                     })
                 }
@@ -4978,7 +5032,7 @@ Treat genre conventions as suggested, not confirmed, unless the user explicitly 
                 .flatMap(turn => turn.attachments || [])
                 .slice(-8),
             selectedProfile: inspireProfileState.selectedRecommendation || null,
-            availableGameTemplates: getAvailableGameTemplatesForAI().filter(template => template && template.published !== false && template.compileReady === true),
+            availableGameTemplates: [],
             aiStages: {
                 analysisModel: analysisState.analysisModelMeta || null,
                 gamePlanModel: analysisState.finalModelMeta || null
@@ -5507,12 +5561,13 @@ Treat genre conventions as suggested, not confirmed, unless the user explicitly 
 
     function scrollChatMessageIntoReadableView(message, mode = 'auto') {
         if (!chatHistory || !message) return;
+        if (mode === 'none') return;
         requestAnimationFrame(() => {
             requestAnimationFrame(() => {
                 const historyRect = chatHistory.getBoundingClientRect();
                 const messageRect = message.getBoundingClientRect();
                 const hasGeneratedSurface = Boolean(message.querySelector(
-                    '.inspire-recommendation-list, .generation-result, .ai-work-card, .game-plan-summary, .summary-grid'
+                    '.inspire-recommendation-list, .generation-result, .ai-work-card, .game-plan-summary, .ai-plan-summary, .summary-grid'
                 ));
                 const shouldAnchorStart = mode === 'start' ||
                     hasGeneratedSurface ||
@@ -5528,11 +5583,74 @@ Treat genre conventions as suggested, not confirmed, unless the user explicitly 
         });
     }
 
+    function scrollToAiPlanSummary(options = {}) {
+        if (!chatHistory) return;
+        const targetMessage = latestGamePlanSummaryMessage && latestGamePlanSummaryMessage.isConnected
+            ? latestGamePlanSummaryMessage
+            : chatHistory.querySelector('.chat-message.ai-plan-summary-message:last-of-type');
+        if (!targetMessage) return;
+        scrollChatMessageIntoReadableView(targetMessage, options.mode || 'start');
+    }
+
+    function scrollGenerationProgressIntoView(options = {}) {
+        if (!chatHistory) return;
+        const target = progressContainer && progressContainer.isConnected
+            ? progressContainer
+            : chatHistory.querySelector('#progressContainer');
+        if (!target) return;
+        const offset = Number.isFinite(options.offset) ? options.offset : 28;
+        requestAnimationFrame(() => {
+            requestAnimationFrame(() => {
+                const historyRect = chatHistory.getBoundingClientRect();
+                const targetRect = target.getBoundingClientRect();
+                const remainingSpace = Math.max(0, chatHistory.clientHeight - targetRect.height);
+                const desiredTop = Math.max(offset, Math.min(remainingSpace * 0.38, 140));
+                const nextTop = chatHistory.scrollTop + (targetRect.top - historyRect.top) - desiredTop;
+                const maxScroll = Math.max(0, chatHistory.scrollHeight - chatHistory.clientHeight);
+                chatHistory.scrollTop = Math.max(0, Math.min(nextTop, maxScroll));
+            });
+        });
+    }
+
+    function setupAiPlanSummaryDisclosure(message) {
+        if (!message) return;
+        const summary = message.querySelector('.ai-plan-summary');
+        if (!summary || summary.dataset.disclosureReady === '1') return;
+
+        summary.dataset.disclosureReady = '1';
+        requestAnimationFrame(() => {
+            const baseHeight = chatHistory ? chatHistory.clientHeight : window.innerHeight;
+            const maxCollapsedHeight = Math.max(280, Math.min(520, Math.round(baseHeight * 0.56)));
+            if (summary.scrollHeight <= maxCollapsedHeight + 36) return;
+
+            summary.style.setProperty('--ai-plan-collapsed-height', `${maxCollapsedHeight}px`);
+            summary.classList.add('is-collapsed');
+
+            const button = document.createElement('button');
+            button.type = 'button';
+            button.className = 'ai-plan-show-more';
+            button.textContent = 'Show more';
+            button.setAttribute('aria-expanded', 'false');
+            button.addEventListener('click', () => {
+                const expanded = summary.classList.toggle('is-expanded');
+                summary.classList.toggle('is-collapsed', !expanded);
+                button.textContent = expanded ? 'Show less' : 'Show more';
+                button.setAttribute('aria-expanded', expanded ? 'true' : 'false');
+                scrollToAiPlanSummary({ mode: 'start' });
+            });
+
+            summary.insertAdjacentElement('afterend', button);
+        });
+    }
+
     function addBotMessage(text, onRendered, options = {}) {
         cleanupChatModelBadges();
         const isPending = Boolean(options.pending);
         const msgDiv = document.createElement('div');
         msgDiv.className = 'chat-message bot';
+        if (options.messageClass) {
+            msgDiv.classList.add(...String(options.messageClass).split(/\s+/).filter(Boolean));
+        }
         msgDiv.innerHTML = `
             <div class="chat-content-wrap">
                 <div class="chat-bubble ${isPending ? 'ai-work-bubble' : 'typing-indicator'}">
@@ -5550,6 +5668,11 @@ Treat genre conventions as suggested, not confirmed, unless the user explicitly 
                 bubble.className = 'chat-bubble';
                 bubble.innerHTML = finalText;
                 recordChatTurn('assistant', finalText, { pending: isPending });
+                if (options.summaryAnchor) {
+                    latestGamePlanSummaryMessage = msgDiv;
+                    msgDiv.classList.add('ai-plan-summary-message');
+                    setupAiPlanSummaryDisclosure(msgDiv);
+                }
                 if (typeof onRendered === 'function') {
                     onRendered(msgDiv);
                 }
@@ -5719,11 +5842,29 @@ Treat genre conventions as suggested, not confirmed, unless the user explicitly 
         return { job, card, message };
     }
 
+    function clearActiveGenerationWorkfeedForNewAttempt() {
+        const handle = activeGenerationWorkfeed;
+        if (handle && handle.message && handle.message.isConnected) {
+            handle.message.remove();
+        } else if (chatHistory) {
+            chatHistory.querySelectorAll('.workfeed-card[data-workfeed-id^="generation-"]').forEach(card => {
+                const message = card.closest('.chat-message');
+                if (message) message.remove();
+                else card.remove();
+            });
+        }
+        activeGenerationWorkfeed = null;
+    }
+
     function refreshChatWorkfeed(handle) {
         const api = getWorkfeedApi();
         if (!handle || !handle.card || !api || typeof api.updateWorkfeedCard !== 'function') return handle;
         api.updateWorkfeedCard(handle.card, handle.job);
-        if (chatHistory) chatHistory.scrollTop = chatHistory.scrollHeight;
+        if (chatHistory) {
+            const progressVisible = progressContainer && progressContainer.style.display !== 'none' && progressContainer.parentElement === chatHistory;
+            if (progressVisible) scrollGenerationProgressIntoView();
+            else chatHistory.scrollTop = chatHistory.scrollHeight;
+        }
         return handle;
     }
 
@@ -5739,6 +5880,53 @@ Treat genre conventions as suggested, not confirmed, unless the user explicitly 
         if (!handle || !api || typeof api.workfeed.updateWorkfeedStep !== 'function') return handle;
         api.workfeed.updateWorkfeedStep(handle.job, stepId, updates);
         return refreshChatWorkfeed(handle);
+    }
+
+    function syncGenerationPipelineWorkfeed(handle, project = {}) {
+        if (!handle || !project) return handle;
+        const stages = project.generationReport && Array.isArray(project.generationReport.pipelineStages)
+            ? project.generationReport.pipelineStages
+            : [];
+        const statusMap = {
+            done: 'done',
+            completed: 'done',
+            success: 'done',
+            warning: 'warning',
+            failed: 'failed',
+            error: 'failed',
+            skipped: 'skipped',
+            running: 'running',
+            queued: 'queued'
+        };
+        stages.forEach(stage => {
+            const id = String(stage.id || '');
+            if (!id) return;
+            const status = statusMap[String(stage.status || '').toLowerCase()] || 'done';
+            updateChatWorkfeedStep(handle, id, {
+                status,
+                summary: stage.summary || (status === 'done' ? 'Completed.' : '')
+            });
+        });
+        return handle;
+    }
+
+    function resetGenerationPipelineWorkfeedForAttempt(handle, event = {}) {
+        if (!handle || !handle.job) return handle;
+        handle.job.meta = {
+            ...(handle.job.meta || {}),
+            activeAttemptId: event.attemptId || ''
+        };
+        ['core_playable', 'visual_enhance', 'gameplay_depth', 'ui_polish', 'project_meta', 'final_validation', 'preview'].forEach(stepId => {
+            updateChatWorkfeedStep(handle, stepId, {
+                status: 'queued',
+                summary: ''
+            });
+        });
+        updateChatWorkfeedStep(handle, 'request', {
+            status: 'done',
+            summary: event.summary || 'Starting selected model pipeline.'
+        });
+        return handle;
     }
 
     function failChatWorkfeed(handle, stepId, summary = '') {
@@ -5762,7 +5950,7 @@ Treat genre conventions as suggested, not confirmed, unless the user explicitly 
     }
 
     function isGenerationCancelled(error) {
-        return Boolean(error && (error.code === 'GENERATION_CANCELLED' || error.name === 'AbortError'));
+        return Boolean(error && (error.code === 'GENERATION_CANCELLED' || error.code === 'MODEL_REQUEST_ABORTED' || error.name === 'AbortError'));
     }
 
     function assertGenerationNotCancelled(cancelToken) {
@@ -5981,27 +6169,26 @@ Treat genre conventions as suggested, not confirmed, unless the user explicitly 
     }
 
     function openManualQueueModal() {
-        if (!window.DroiChat || typeof window.DroiChat.renderQueuedCard !== 'function') {
+        if (!emailModal) {
             const fallbackCard = renderFallbackQueuedCard();
             appendChatCard(fallbackCard);
             const fallbackInput = fallbackCard.querySelector('input[type="email"]');
             if (fallbackInput) fallbackInput.focus();
             return;
         }
-        const card = window.DroiChat.renderQueuedCard({
-            title: 'We can queue this request',
-            message: 'Leave an email and we will follow up when this request is ready.',
-            submitLabel: t('send'),
-            skipLabel: t('skip')
-        }, {
-            onSubmit: submitManualQueueEmail,
-            onSkip: ({ status }) => {
-                if (status) status.textContent = t('emailLater');
-            }
-        });
-        appendChatCard(card);
-        const input = card.querySelector('input[type="email"]');
-        if (input) input.focus();
+        updateLocalizedUI();
+        if (modalEmailInput) {
+            modalEmailInput.disabled = false;
+            modalEmailInput.value = '';
+        }
+        if (modalEmailSubmitBtn) {
+            modalEmailSubmitBtn.disabled = false;
+            modalEmailSubmitBtn.textContent = t('send');
+        }
+        emailModal.style.display = 'flex';
+        emailModal.offsetWidth;
+        emailModal.classList.add('active');
+        if (modalEmailInput) modalEmailInput.focus();
     }
 
     function getVisibleFlowErrorActions(classified) {
@@ -7479,13 +7666,20 @@ Lock Game Type to "Bullet Hell / Flying Shooter" and genre to "bullet-hell".`
             });
             return;
         }
-        const pendingMessage = addBotMessage('', null, { pending: true, workType: 'shaping' });
+        const pendingMessage = addBotMessage('', null, {
+            pending: true,
+            workType: 'shaping',
+            scrollMode: 'start',
+            summaryAnchor: true,
+            messageClass: 'ai-plan-summary-message'
+        });
         const summaryHtml = await buildGamePlanSummaryHtml();
         if (pendingMessage) pendingMessage.finish(summaryHtml);
         regTimeout(() => {
             addBotMessage(t('ready'), () => {
                 regTimeout(renderFinalActionButtons, 160);
-            });
+                regTimeout(() => scrollToAiPlanSummary({ mode: 'start' }), 220);
+            }, { scrollMode: 'none' });
         }, 500);
     }
 
@@ -7713,6 +7907,8 @@ Lock Game Type to "Bullet Hell / Flying Shooter" and genre to "bullet-hell".`
 
     function compactGameSpecForGeneration(spec = getCurrentGameSpec()) {
         return {
+            title: compactModelText(spec.title || spec.name || '', 120),
+            name: compactModelText(spec.name || spec.title || '', 120),
             gameType: compactModelText(spec.gameType, 160),
             artStyle: compactModelText(spec.artStyle, 160),
             gameSetting: compactModelText(spec.gameSetting, 180),
@@ -7731,6 +7927,7 @@ Lock Game Type to "Bullet Hell / Flying Shooter" and genre to "bullet-hell".`
     }
 
     function compactProductionPlanForGeneration(plan = latestGamePlan, spec = getCurrentGameSpec()) {
+        if (!plan) return null;
         const normalized = normalizeGamePlanForGeneration(plan, spec);
         return {
             title: compactModelText(normalized.title, 120),
@@ -7745,7 +7942,9 @@ Lock Game Type to "Bullet Hell / Flying Shooter" and genre to "bullet-hell".`
     }
 
     function buildCompactProductionBriefText(plan = latestGamePlan, spec = getCurrentGameSpec()) {
+        if (!plan) return '';
         const compact = compactProductionPlanForGeneration(plan, spec);
+        if (!compact) return '';
         return [
             `Title: ${compact.title}`,
             `Playable loop: ${compact.coreLoop}`,
@@ -7768,6 +7967,8 @@ Lock Game Type to "Bullet Hell / Flying Shooter" and genre to "bullet-hell".`
         const uniqueBackground = [...new Set(backgroundParts)];
         return {
             ...spec,
+            title: normalized.title || spec.title || spec.name || '',
+            name: normalized.title || spec.name || spec.title || '',
             gameSetting: spec.gameSetting || normalized.title,
             background: uniqueBackground.join('\n'),
             coreGameplay: normalized.coreLoop || spec.coreGameplay,
@@ -8185,7 +8386,7 @@ Lock Game Type to "Bullet Hell / Flying Shooter" and genre to "bullet-hell".`
 
         return {
             meta: {
-                gameName: productPlan ? productPlan.gameName : `${spec.gameSetting || 'Custom'} ${template.label}`,
+                gameName: firstText(spec.title, spec.name, productPlan && productPlan.gameName, `${spec.gameSetting || 'Custom'} ${template.label}`),
                 gameType: productPlan ? 'bullet-hell' : template.type,
                 version: 'p0-preview',
                 description: productPlan ? productPlan.meta.description : (spec.background || 'Generated from one natural-language prompt.'),
@@ -8715,18 +8916,27 @@ Lock Game Type to "Bullet Hell / Flying Shooter" and genre to "bullet-hell".`
     }
 
     function normalizeProjectMeta(project = {}, generated = {}, previewUrl = '') {
+        const clampDescription = (value) => {
+            const fallback = 'A playable browser game generated by Droi AI.';
+            const cleaned = String(value || '')
+                .replace(/\s+/g, ' ')
+                .replace(/\b(Requirements?|Acceptance|Constraints?|Checklist|GameSpec|Production brief)\s*:\s*/gi, '')
+                .trim();
+            const sentences = (cleaned || fallback).match(/[^.!?]+[.!?]+|[^.!?]+$/g) || [cleaned || fallback];
+            return sentences.map(sentence => sentence.trim()).filter(Boolean).slice(0, 2).join(' ').slice(0, 260).trim() || fallback;
+        };
         const sourceMeta = project.projectMeta && typeof project.projectMeta === 'object' ? project.projectMeta : {};
         const generatedMeta = generated && generated.meta && typeof generated.meta === 'object' ? generated.meta : {};
         const userSpec = generated && generated.userSpec && typeof generated.userSpec === 'object' ? generated.userSpec : {};
         const title = String(sourceMeta.title || sourceMeta.projectName || project.title || project.name || generatedMeta.gameName || userSpec.gameType || 'Generated Game').trim();
-        const description = String(
+        const description = clampDescription(
             sourceMeta.description ||
             sourceMeta.englishDescription ||
             project.description ||
             generatedMeta.description ||
             userSpec.background ||
             'A playable browser game generated by Droi AI.'
-        ).trim();
+        );
         const coverImage = sourceMeta.coverImage && typeof sourceMeta.coverImage === 'object'
             ? sourceMeta.coverImage
             : {
@@ -8840,41 +9050,158 @@ Lock Game Type to "Bullet Hell / Flying Shooter" and genre to "bullet-hell".`
         return normalizedProject;
     }
 
-    async function generateAIDirectGameProject(spec, productionPlan = null, productionBrief = '') {
+    function throwStreamedAIFlowError(payload, phase = 'AI direct game generation') {
+        const errorData = payload && payload.error ? payload.error : payload;
+        const error = new Error(errorData && (errorData.message || errorData.title) || `${phase} failed.`);
+        error.code = errorData && errorData.code || 'MODEL_CALL_FAILED';
+        error.category = errorData && errorData.category || 'recoverable_model_failure';
+        error.title = errorData && errorData.title || phase;
+        error.message = errorData && errorData.message || error.message;
+        error.technicalMessage = errorData && errorData.technicalMessage || '';
+        error.data = errorData || {};
+        error.validationReport = payload && payload.validationReport;
+        throw error;
+    }
+
+    function applyAIDirectStreamEventToWorkfeed(event, progress = null) {
+        const handle = progress && progress.workfeedHandle;
+        if (!handle || !event) return;
+        if (event.type === 'attempt_started') {
+            resetGenerationPipelineWorkfeedForAttempt(handle, event);
+            return;
+        }
+        const activeAttemptId = handle.job && handle.job.meta && handle.job.meta.activeAttemptId;
+        if (event.attemptId && event.attemptId !== activeAttemptId) {
+            resetGenerationPipelineWorkfeedForAttempt(handle, event);
+        }
+        if (Array.isArray(event.pipelineStages)) {
+            syncGenerationPipelineWorkfeed(handle, { generationReport: { pipelineStages: event.pipelineStages } });
+        }
+        const stage = event.stage && typeof event.stage === 'object' ? event.stage : null;
+        const stageId = stage && stage.id ? stage.id : '';
+        if (!stageId) return;
+        const type = String(event.type || '');
+        const status = type === 'stage_started'
+            ? 'running'
+            : type === 'stage_failed'
+                ? 'failed'
+                : type === 'stage_warning'
+                    ? 'warning'
+                    : 'done';
+        updateChatWorkfeedStep(handle, stageId, {
+            status,
+            summary: stage.summary || (status === 'running' ? 'Working...' : 'Completed.')
+        });
+    }
+
+    async function readAIDirectGenerationStream(response, progress = null) {
+        const reader = response.body && response.body.getReader ? response.body.getReader() : null;
+        if (!reader) return parseJsonResponse(response);
+        const decoder = new TextDecoder();
+        let buffer = '';
+        let finalPayload = null;
+        let streamedError = null;
+        const consumeLine = (line) => {
+            const trimmed = String(line || '').trim();
+            if (!trimmed) return;
+            let event = null;
+            try {
+                event = JSON.parse(trimmed);
+            } catch (error) {
+                recordDiagnostic('ai-direct-stream-parse-warning', {
+                    message: error.message || String(error),
+                    line: trimmed.slice(0, 240)
+                });
+                return;
+            }
+            if (event.type === 'final') {
+                finalPayload = event.project || event.data || event;
+                return;
+            }
+            if (event.type === 'error') {
+                streamedError = event;
+                return;
+            }
+            applyAIDirectStreamEventToWorkfeed(event, progress);
+        };
+        while (true) {
+            const { value, done } = await reader.read();
+            if (value) {
+                buffer += decoder.decode(value, { stream: !done });
+                const lines = buffer.split(/\r?\n/);
+                buffer = lines.pop() || '';
+                lines.forEach(consumeLine);
+            }
+            if (done) break;
+        }
+        buffer += decoder.decode();
+        if (buffer.trim()) consumeLine(buffer);
+        if (streamedError) throwStreamedAIFlowError(streamedError);
+        if (!finalPayload) {
+            throw createAIFlowError(
+                'AI_DIRECT_STREAM_INCOMPLETE',
+                'generation_service_failure',
+                'AI direct generation stream ended early',
+                'The backend stream ended before returning a final generated project.',
+                '',
+                ['retry', 'manual_queue']
+            );
+        }
+        return finalPayload;
+    }
+
+    async function generateAIDirectGameProject(spec, productionPlan = null, productionBrief = '', progress = null) {
         const activeModel = requireActiveAIModel('AI direct game generation');
         const prompt = savedPrompt || spec.background || '';
-        const requestSpec = compactGameSpecForGeneration(spec);
-        const requestPlan = compactProductionPlanForGeneration(productionPlan, requestSpec);
+        const compactSpec = compactGameSpecForGeneration(spec);
+        const requestPlan = compactProductionPlanForGeneration(productionPlan, compactSpec);
+        const planTitle = requestPlan && requestPlan.title ? requestPlan.title : '';
+        const requestSpec = {
+            ...compactSpec,
+            title: compactModelText(planTitle || compactSpec.title || compactSpec.gameSetting || compactSpec.gameType || 'AI Direct Game', 120),
+            name: compactModelText(planTitle || compactSpec.name || compactSpec.gameSetting || compactSpec.gameType || 'AI Direct Game', 120)
+        };
         const requestBrief = buildCompactProductionBriefText(requestPlan, requestSpec);
         const callEventId = addExecutionEvent(
             `Calling ${activeModel.label || getModelLabel(activeModel.providerId, activeModel.modelId)}`,
             'running',
             '/api/ai/generate-game-project'
         );
-        const response = await fetch(apiUrl('/api/ai/generate-game-project'), {
-            method: 'POST',
-            credentials: 'include',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({
-                prompt,
-                originalPrompt: prompt,
-                gameSpec: requestSpec,
-                productionPlan: requestPlan,
-                productionBrief: requestBrief || productionBrief,
-                provider: activeModel.providerId,
-                model: activeModel.modelId,
-                modelMeta: activeModel,
-                constraints: {
-                    runtime: 'HTML5 Canvas',
-                    playable: true,
-                    responsive: true,
-                    externalDependencies: false,
-                    preferredPackaging: 'single-file-first',
-                    generationMode: 'ai_direct'
-                }
-            })
-        });
+        const requestController = new AbortController();
+        if (progress) progress.abortController = requestController;
+        let response;
+        try {
+            response = await fetch(apiUrl('/api/ai/generate-game-project'), {
+                method: 'POST',
+                credentials: 'include',
+                headers: { 'Content-Type': 'application/json', 'Accept': 'application/x-ndjson, application/json' },
+                signal: requestController.signal,
+                body: JSON.stringify({
+                    stream: true,
+                    prompt,
+                    originalPrompt: prompt,
+                    gameSpec: requestSpec,
+                    productionPlan: requestPlan,
+                    productionBrief: requestBrief || productionBrief,
+                    provider: activeModel.providerId,
+                    model: activeModel.modelId,
+                    modelMeta: activeModel,
+                    constraints: {
+                        runtime: 'HTML5 Canvas',
+                        playable: true,
+                        responsive: true,
+                        externalDependencies: false,
+                        preferredPackaging: 'single-file-first',
+                        generationMode: 'ai_direct'
+                    }
+                })
+            });
+        } catch (error) {
+            if (progress && progress.abortController === requestController) progress.abortController = null;
+            throw error;
+        }
         if (response.status === 404) {
+            if (progress && progress.abortController === requestController) progress.abortController = null;
             updateExecutionEvent(callEventId, {
                 status: 'failed',
                 title: 'Backend failed - generation endpoint missing',
@@ -8891,8 +9218,12 @@ Lock Game Type to "Bullet Hell / Flying Shooter" and genre to "bullet-hell".`
         }
         let data;
         try {
-            data = await parseJsonResponse(response);
+            const contentType = response.headers.get('content-type') || '';
+            data = contentType.includes('application/x-ndjson')
+                ? await readAIDirectGenerationStream(response, progress)
+                : await parseJsonResponse(response);
         } catch (error) {
+            if (progress && progress.abortController === requestController) progress.abortController = null;
             if (isAIDirectStageContractError(error)) {
                 updateExecutionEvent(callEventId, {
                     status: 'failed',
@@ -8924,6 +9255,7 @@ Lock Game Type to "Bullet Hell / Flying Shooter" and genre to "bullet-hell".`
             title: `Created files - ${(project.codeFiles || []).map(file => file.path).slice(0, 3).join(', ') || 'project files'}`,
             detail: `Preview: ${project.previewUrl || ''}${modelDetail}\nFiles: ${(project.codeFiles || []).map(file => `${file.path}${file.content ? ` +${String(file.content).split('\n').length}` : ''}`).join('\n')}`
         });
+        if (progress && progress.abortController === requestController) progress.abortController = null;
         return project;
     }
 
@@ -9067,6 +9399,15 @@ Lock Game Type to "Bullet Hell / Flying Shooter" and genre to "bullet-hell".`
     async function TemplateAssistedGenerator(plan, spec = getCurrentGameSpec(), progress = null) {
         if (!plan || !plan.decision || !plan.decision.canAutoGenerate) return plan;
         if (plan.generatedProject) return plan;
+        plan.generationMode = 'ai_direct';
+        plan.decision = {
+            ...plan.decision,
+            templateId: 'ai_direct',
+            templateLabel: 'AI direct',
+            generationMode: 'ai_direct',
+            candidates: []
+        };
+        return ensureAIDirectProject(plan, spec, progress);
         const templateId = plan.decision.templateId || '';
         if (!templateId || templateId === 'ai_direct' || !isCompileReadyRuntimeTemplate(templateId)) {
             plan.generationMode = 'ai_direct';
@@ -9268,31 +9609,30 @@ Lock Game Type to "Bullet Hell / Flying Shooter" and genre to "bullet-hell".`
         try {
             assertGenerationNotCancelled(cancelToken);
             if (progress && progress.workfeedHandle) {
-                updateChatWorkfeedStep(progress.workfeedHandle, 'generate', {
+                updateChatWorkfeedStep(progress.workfeedHandle, 'core_playable', {
                     status: 'running',
-                    summary: 'Calling the selected AI model for complete game files.'
+                    summary: 'Calling the selected AI model for the playable core.'
                 });
             }
-            if (progress) progress.setStage('generate', 15, 70, AI_DIRECT_GENERATION_TIMEOUT_MS, 'Generating a complete playable HTML5 game with AI direct...');
+            if (progress) progress.setStage('generate', 15, 70, AI_DIRECT_GENERATION_TIMEOUT_MS, 'Building playable core, then polishing the final version...');
             const project = await withTimeout(
-                generateAIDirectGameProject(sourceSpec, plan.productionPlan || latestGamePlan, plan.productionBrief || ''),
+                generateAIDirectGameProject(sourceSpec, plan.productionPlan || latestGamePlan, plan.productionBrief || '', progress),
                 AI_DIRECT_GENERATION_TIMEOUT_MS,
-                'AI direct game generation'
+                'AI direct game generation',
+                () => {
+                    if (progress && progress.abortController) progress.abortController.abort();
+                }
             );
             assertGenerationNotCancelled(cancelToken);
             if (progress && progress.workfeedHandle) {
-                advanceChatWorkfeed(progress.workfeedHandle, 'generate', {
-                    summary: project.modelMeta
-                        ? `Model response received from ${modelMetaDisplay(project.modelMeta) || 'the selected model'}.`
-                        : 'Model response received.'
-                });
+                syncGenerationPipelineWorkfeed(progress.workfeedHandle, project);
             }
             if (progress) progress.completeStage('generate');
             if (progress) progress.setStage('validate', 70, 90, 5000, 'Validating generated game...');
             assertGenerationNotCancelled(cancelToken);
             addExecutionEvent('Validating generated game', project.validationReport && project.validationReport.ok === false ? 'warning' : 'done', project.validationReport ? JSON.stringify(project.validationReport, null, 2).slice(0, 1200) : 'Backend validation report accepted.');
             if (progress && progress.workfeedHandle) {
-                updateChatWorkfeedStep(progress.workfeedHandle, 'validate', {
+                updateChatWorkfeedStep(progress.workfeedHandle, 'final_validation', {
                     status: project.validationReport && project.validationReport.ok === false ? 'warning' : 'done',
                     summary: project.validationReport
                         ? (project.validationReport.ok === false ? 'Backend validation returned issues to review.' : 'Backend validation passed.')
@@ -9326,7 +9666,7 @@ Lock Game Type to "Bullet Hell / Flying Shooter" and genre to "bullet-hell".`
             if (isGenerationCancelled(error)) throw error;
             addExecutionEvent('Generation failed', 'failed', error && (error.message || String(error)), { open: true });
             if (progress && progress.workfeedHandle) {
-                failChatWorkfeed(progress.workfeedHandle, 'generate', error && (error.message || String(error)));
+                failChatWorkfeed(progress.workfeedHandle, 'core_playable', error && (error.message || String(error)));
             }
             recordDiagnostic('ai-direct-generation-failed', {
                 phase: 'AI direct game generation',
@@ -9339,13 +9679,14 @@ Lock Game Type to "Bullet Hell / Flying Shooter" and genre to "bullet-hell".`
     async function generateProjectByMode(plan, spec = getCurrentGameSpec(), progress = null) {
         if (!plan || !plan.decision || !plan.decision.canAutoGenerate) return plan;
         if (plan.generatedProject) return plan;
-        const requestedMode = plan.generationMode || plan.decision.generationMode || 'ai_direct';
-        if (requestedMode === 'template_assisted') {
-            const availabilityError = getTemplateAvailabilityError(plan.decision);
-            if (!availabilityError) return TemplateAssistedGenerator(plan, spec, progress);
-            addExecutionEvent('Template unavailable - using AI direct', 'warning', availabilityError);
-        }
         plan.generationMode = 'ai_direct';
+        plan.decision = {
+            ...plan.decision,
+            templateId: 'ai_direct',
+            templateLabel: 'AI direct',
+            generationMode: 'ai_direct',
+            candidates: []
+        };
         return ensureAIDirectProject(plan, spec, progress);
     }
 
@@ -9479,7 +9820,7 @@ Lock Game Type to "Bullet Hell / Flying Shooter" and genre to "bullet-hell".`
         list.appendChild(newIdeaBtn);
 
         chatHistory.appendChild(container);
-        chatHistory.scrollTop = chatHistory.scrollHeight;
+        scrollToAiPlanSummary({ mode: 'start' });
 
         const params = new URLSearchParams(window.location.search);
         if (params.get('autorun') === '1' && params.get('testPrompt') && !window.__e2eFinalActionAutoConfirmed) {
@@ -9851,6 +10192,7 @@ Lock Game Type to "Bullet Hell / Flying Shooter" and genre to "bullet-hell".`
     const WORKSPACE_INDEXED_DB_VERSION = 1;
     const WORKSPACE_STORE = 'workspaces';
     const WORKSPACE_CURRENT_STORE = 'current';
+    const WORKSPACE_ACTIVE_HINT_KEY = 'gamia_active_workspace_hint';
     const WORKSPACE_SNAPSHOT_DEBOUNCE_MS = 700;
     const WORKSPACE_RESTORE_MAX_AGE_MS = 6 * 60 * 60 * 1000;
     let workspaceDbPromise = null;
@@ -9913,11 +10255,29 @@ Lock Game Type to "Bullet Hell / Flying Shooter" and genre to "bullet-hell".`
     }
 
     async function clearActiveWorkspacePointer() {
+        try {
+            localStorage.removeItem(WORKSPACE_ACTIVE_HINT_KEY);
+        } catch (error) {
+            // Local workspace restore hint is best effort only.
+        }
         await workspaceDbPut(WORKSPACE_CURRENT_STORE, {
             key: 'activeWorkspaceId',
             workspaceId: '',
             updatedAt: new Date().toISOString()
         });
+    }
+
+    function writeActiveWorkspaceHint(snapshot) {
+        if (!snapshot || !snapshot.workspaceId) return;
+        try {
+            localStorage.setItem(WORKSPACE_ACTIVE_HINT_KEY, JSON.stringify({
+                workspaceId: snapshot.workspaceId,
+                projectId: snapshot.projectId || '',
+                updatedAt: snapshot.updatedAt || new Date().toISOString()
+            }));
+        } catch (error) {
+            // IndexedDB remains the source of truth if localStorage is unavailable.
+        }
     }
 
     function safeWorkspaceIdSegment(value = 'workspace') {
@@ -10145,6 +10505,7 @@ Lock Game Type to "Bullet Hell / Flying Shooter" and genre to "bullet-hell".`
                 workspaceId: snapshot.workspaceId,
                 updatedAt: snapshot.updatedAt
             });
+            writeActiveWorkspaceHint(snapshot);
         }
         return ok;
     }
@@ -10156,6 +10517,7 @@ Lock Game Type to "Bullet Hell / Flying Shooter" and genre to "bullet-hell".`
         const ok = await workspaceDbPut(WORKSPACE_STORE, snapshot);
         if (ok) {
             await workspaceDbPut(WORKSPACE_CURRENT_STORE, { key: 'activeWorkspaceId', workspaceId: snapshot.workspaceId, updatedAt: snapshot.updatedAt });
+            writeActiveWorkspaceHint(snapshot);
         }
         return ok;
     }
@@ -16154,12 +16516,6 @@ Generation Mode: AI direct
 HTML5 Constraints: Canvas, playable, responsive, no external dependencies, single-file first`;
 
         regTimeout(() => {
-            // Focus on the final summary by scrolling it to the top
-            const messages = chatHistory.querySelectorAll('.chat-message');
-            const summaryMessage = messages[messages.length - 1];
-            if (summaryMessage) {
-                summaryMessage.scrollIntoView({ behavior: 'smooth', block: 'start' });
-            }
             chatHistory.classList.add('is-generating');
 
             // UI Transition: hide chat input
@@ -16176,9 +16532,8 @@ HTML5 Constraints: Canvas, playable, responsive, no external dependencies, singl
             }
             chatHistory.appendChild(progressContainer);
 
-            // Ensure scroll to see the progress bar
             regTimeout(() => {
-                chatHistory.scrollTop = chatHistory.scrollHeight;
+                scrollGenerationProgressIntoView();
             }, 100);
 
             (async () => {
@@ -16187,6 +16542,7 @@ HTML5 Constraints: Canvas, playable, responsive, no external dependencies, singl
                     const generationPlan = buildGenerationPlan(spec, latestGamePlan);
                     latestGenerationPlan = generationPlan;
                     runGenerationAnimation(generationPlan);
+                    regTimeout(() => scrollGenerationProgressIntoView(), 180);
                 } catch (error) {
                     const classified = classifyAIFlowError(error, 'Generation setup');
                     if (progressContainer) progressContainer.style.display = 'none';
@@ -16314,7 +16670,7 @@ HTML5 Constraints: Canvas, playable, responsive, no external dependencies, singl
                 regTimeout(() => {
                     addUserMessage(t('inspire'));
                     regTimeout(() => {
-                        startGuidedGameSpecWizard();
+                        renderInspireModeChoice(1);
                     }, 800);
                 }, 350);
             });
@@ -16575,6 +16931,17 @@ HTML5 Constraints: Canvas, playable, responsive, no external dependencies, singl
 
     async function beginPromptGenerationFromHome(prompt) {
         const safePrompt = redactSensitiveText(prompt);
+        resetBulletHellPlanState();
+        resetExecutionTimeline();
+        chatSelections = createEmptySelections();
+        chatShown = createChatTracking(() => new Set());
+        chatCurrent = createChatTracking(() => []);
+        latestGamePlan = null;
+        latestGamePlanDraft = '';
+        latestGamePlanSummaryMessage = null;
+        latestGenerationPlan = null;
+        analysisState.intentSummary = null;
+        savedPrompt = safePrompt;
         openChatView();
         setChatLanguageFromText(safePrompt);
         addUserMessage(safePrompt);
@@ -17188,7 +17555,7 @@ HTML5 Constraints: Canvas, playable, responsive, no external dependencies, singl
     function buildAIDirectProgressMessage() {
         const activeModel = getActiveModelMeta();
         const label = activeModel && (activeModel.modelLabel || activeModel.label || activeModel.modelId);
-        return `Generating gameplay patch${label ? ` with ${label}` : ''}...`;
+        return `Generating a complete playable HTML5 game${label ? ` with ${label}` : ''}...`;
     }
 
     function createGenerationProgressController() {
@@ -17318,9 +17685,11 @@ HTML5 Constraints: Canvas, playable, responsive, no external dependencies, singl
         const generationStartedAt = Date.now();
         const cancelToken = { cancelled: false };
         activeGenerationCancelToken = cancelToken;
+        clearActiveGenerationWorkfeedForNewAttempt();
+        let generationWorkfeed = null;
         try {
             progress.start(t('progressAuto'));
-            activeGenerationWorkfeed = createChatWorkfeed({
+            generationWorkfeed = createChatWorkfeed({
                 id: `generation-${generationStartedAt}`,
                 type: 'generation',
                 title: 'Creating your game with the selected AI model',
@@ -17328,14 +17697,19 @@ HTML5 Constraints: Canvas, playable, responsive, no external dependencies, singl
                 cancelable: true,
                 steps: [
                     { id: 'request', label: 'Confirming GameSpec', status: 'running', summary: 'Using your confirmed task and selections.' },
-                    { id: 'generate', label: 'Generating playable files', status: 'queued', area: 'AI Direct' },
-                    { id: 'validate', label: 'Checking generated output', status: 'queued', area: 'Backend validation' },
+                    { id: 'core_playable', label: 'Building playable core', status: 'queued', area: 'AI Direct pipeline' },
+                    { id: 'visual_enhance', label: 'Polishing art style', status: 'queued', area: 'AI Direct pipeline' },
+                    { id: 'gameplay_depth', label: 'Adding depth', status: 'queued', area: 'AI Direct pipeline' },
+                    { id: 'ui_polish', label: 'Polishing UI', status: 'queued', area: 'AI Direct pipeline' },
+                    { id: 'project_meta', label: 'Preparing project info', status: 'queued', area: 'AI Direct pipeline' },
+                    { id: 'final_validation', label: 'Validating preview', status: 'queued', area: 'Backend validation' },
                     { id: 'preview', label: 'Preparing workspace preview', status: 'queued', area: 'Browser workspace' }
                 ],
                 onCancel: () => {
                     if (cancelToken.cancelled) return;
                     cancelToken.cancelled = true;
-                    cancelChatWorkfeed(activeGenerationWorkfeed, 'Generation canceled before the workspace was created.');
+                    if (progress.abortController) progress.abortController.abort();
+                    cancelChatWorkfeed(generationWorkfeed, 'Generation canceled before the workspace was created.');
                     addExecutionEvent('Generation canceled', 'warning', 'The active AI Direct request was canceled by the user.');
                     if (progressContainer) progressContainer.style.display = 'none';
                     chatHistory.classList.remove('is-generating');
@@ -17343,9 +17717,11 @@ HTML5 Constraints: Canvas, playable, responsive, no external dependencies, singl
                     if (inputArea) inputArea.style.display = '';
                 }
             });
-            progress.workfeedHandle = activeGenerationWorkfeed;
+            activeGenerationWorkfeed = generationWorkfeed;
+            scrollGenerationProgressIntoView();
+            progress.workfeedHandle = generationWorkfeed;
             progress.cancelToken = cancelToken;
-            advanceChatWorkfeed(activeGenerationWorkfeed, 'request', { summary: 'GameSpec confirmed.' });
+            advanceChatWorkfeed(generationWorkfeed, 'request', { summary: 'GameSpec confirmed.' });
             latestGenerationPlan = plan;
             progress.completeStage('prepare');
             await generateProjectByMode(plan, getCurrentGameSpec(), progress);
@@ -17355,12 +17731,12 @@ HTML5 Constraints: Canvas, playable, responsive, no external dependencies, singl
                 if (progressContainer) progressContainer.style.display = 'none';
                 showAutoGenerationResult(plan, {
                     onMounted: () => {
-                        updateChatWorkfeedStep(activeGenerationWorkfeed, 'preview', {
+                        updateChatWorkfeedStep(generationWorkfeed, 'preview', {
                             status: 'done',
                             summary: previewStatusFromProject(plan.generatedProject)
                         });
                         completeChatWorkfeed(
-                            activeGenerationWorkfeed,
+                            generationWorkfeed,
                             buildGenerationCompletionReceipt(plan, Date.now() - generationStartedAt),
                             { onAction: handleCompletionReceiptAction }
                         );
@@ -17374,7 +17750,7 @@ HTML5 Constraints: Canvas, playable, responsive, no external dependencies, singl
             generationTimeouts.push(tDone);
         } catch (error) {
             if (isGenerationCancelled(error) || cancelToken.cancelled) {
-                cancelChatWorkfeed(activeGenerationWorkfeed, 'Generation canceled before the workspace was created.');
+                cancelChatWorkfeed(generationWorkfeed, 'Generation canceled before the workspace was created.');
                 if (progressContainer) progressContainer.style.display = 'none';
                 chatHistory.classList.remove('is-generating');
                 const inputArea = document.querySelector('.chat-input-wrapper');
@@ -17383,7 +17759,7 @@ HTML5 Constraints: Canvas, playable, responsive, no external dependencies, singl
                 return;
             }
             const classified = progress.fail(error);
-            failChatWorkfeed(activeGenerationWorkfeed, 'generate', classified.message || classified.title || 'AI direct generation failed.');
+            failChatWorkfeed(generationWorkfeed, 'core_playable', classified.message || classified.title || 'AI direct generation failed.');
             const tFail = setTimeout(() => {
                 if (progressContainer) progressContainer.style.display = 'none';
                 chatHistory.classList.remove('is-generating');
