@@ -6,10 +6,20 @@
  */
 
 import * as versions from './state/versions.js';
+import {
+    advanceWorkfeedStep,
+    cancelWorkfeedJob,
+    completeWorkfeedJob,
+    createWorkfeedJob,
+    failWorkfeedJob,
+    normalizeWorkfeedStep,
+    updateWorkfeedStep
+} from './state/workfeed.js';
 import { buildChangeSummary } from './diff.js';
 import { renderEditReceipt, renderRevertReceipt } from './cards/edit-receipt.js';
 import { renderErrorCard } from './cards/error.js';
 import { renderQueuedCard } from './cards/queued.js';
+import { renderCompletionReceipt, renderWorkfeedCard, updateWorkfeedCard } from './cards/workfeed.js';
 
 /**
  * Orchestrates one successful edit:
@@ -39,9 +49,21 @@ function recordEditVersion({ projectKey, prevFiles, nextFiles, prompt, target, b
 window.DroiChat = {
     versions,
     buildChangeSummary,
+    workfeed: {
+        advanceWorkfeedStep,
+        cancelWorkfeedJob,
+        completeWorkfeedJob,
+        createWorkfeedJob,
+        failWorkfeedJob,
+        normalizeWorkfeedStep,
+        updateWorkfeedStep
+    },
     renderEditReceipt,
     renderRevertReceipt,
     renderErrorCard,
     renderQueuedCard,
+    renderWorkfeedCard,
+    updateWorkfeedCard,
+    renderCompletionReceipt,
     recordEditVersion
 };

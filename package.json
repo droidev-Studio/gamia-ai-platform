@@ -1,0 +1,12 @@
+{
+  "name": "droi-ai-landing-p0p1-validation",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "check": "node --check script.js && npm --prefix backend run check",
+    "test:p0p1": "playwright test -c test p0p1-workspace.spec.js --reporter=line --timeout=900000"
+  },
+  "devDependencies": {
+    "@playwright/test": "1.60.0"
+  }
+}

@@ -37,6 +37,18 @@ const MIME_TYPES = {
     '.ico': 'image/x-icon'
 };
 
+function isBlockedStaticPath(relativePath) {
+    const normalized = relativePath.replace(/\\/g, '/').toLowerCase();
+    const segments = normalized.split('/').filter(Boolean);
+    if (segments.some(segment => segment === '.env' || segment.startsWith('.env.'))) return true;
+    if (segments.some(segment => segment.startsWith('.git'))) return true;
+    if (segments[0] === 'backend') return true;
+    if (segments[0] === 'knowledge-base-private') return true;
+    if (segments[0] === 'product-rules-internal') return true;
+    if (segments.includes('api-keys')) return true;
+    return /(^|\/)[^/]*(secret|credential|api-key)[^/]*($|\/)/i.test(normalized);
+}
+
 function sendJson(res, status, data) {
     const body = JSON.stringify(data, null, 2);
     res.writeHead(status, {
@@ -64,6 +76,12 @@ function sendStatic(req, res) {
 
     const decodedPath = decodeURIComponent(requestUrl.pathname);
     const relativePath = decodedPath === '/' ? 'index.html' : decodedPath.replace(/^\/+/, '');
+    if (isBlockedStaticPath(relativePath)) {
+        res.writeHead(403, { 'Cache-Control': 'no-store' });
+        res.end('Forbidden');
+        return;
+    }
+
     const filePath = path.resolve(ROOT, relativePath);
     if (!filePath.startsWith(ROOT)) {
         res.writeHead(403);

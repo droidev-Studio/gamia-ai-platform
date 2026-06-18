@@ -1,7 +1,7 @@
 /*
- * diff.js — frontend changeSummary fallback (CHAT_REBUILD_PLAN T2.2).
- * When the backend does not return a structured changeSummary, derive one
- * from before/after file snapshots so the edit receipt is never empty.
+ * diff.js - frontend changeSummary fallback (CHAT_REBUILD_PLAN T2.2).
+ * Backend changeSummary wins when present; this module only fills gaps so
+ * Workfeed and Receipt cards can stay grounded in real file/output signals.
  */
 
 function linesOf(content) {
@@ -23,6 +23,60 @@ function lineDelta(prevContent, nextContent) {
     return { added, removed };
 }
 
+function unique(values) {
+    return Array.from(new Set((values || []).filter(Boolean)));
+}
+
+function promptMentions(prompt, pattern) {
+    return pattern.test(String(prompt || '').toLowerCase());
+}
+
+function areaForPath(path) {
+    const value = String(path || '').toLowerCase();
+    if (value.includes('assets/') || value.match(/\.(png|jpe?g|webp|gif|svg|mp3|wav|ogg)$/)) return 'Visual/audio assets';
+    if (value.includes('runtime/') || value.endsWith('.js') || value.endsWith('.html') || value.endsWith('.css')) return 'Playable runtime';
+    if (value.includes('spec/') || value.includes('game.json')) return 'Game rules';
+    if (value.includes('manifest') || value.includes('generation-report')) return 'Project metadata';
+    return 'Generated files';
+}
+
+function inferChangedAreas(filesChanged, prompt) {
+    const fromFiles = (filesChanged || []).map(file => areaForPath(file.path));
+    const fromPrompt = [
+        promptMentions(prompt, /style|visual|art|palette|color|background|sprite|asset|theme/) ? 'Visual style' : '',
+        promptMentions(prompt, /audio|music|sound|sfx|bgm/) ? 'Audio feel' : '',
+        promptMentions(prompt, /speed|damage|hp|health|difficulty|wave|rate|number/) ? 'Tuning values' : '',
+        promptMentions(prompt, /mechanic|control|collision|physics|enemy|boss|weapon|shoot|move/) ? 'Gameplay logic' : ''
+    ];
+    return unique([...fromPrompt, ...fromFiles]).slice(0, 4);
+}
+
+function inferPreservedAreas(prompt) {
+    const preserved = [];
+    if (!promptMentions(prompt, /control|input|keyboard|mouse|touch/)) preserved.push('Controls');
+    if (!promptMentions(prompt, /win|lose|fail|restart|game over/)) preserved.push('Win/fail/restart flow');
+    if (!promptMentions(prompt, /core loop|mechanic|rule|gameplay/)) preserved.push('Core gameplay loop');
+    return preserved.length ? preserved : ['Existing playable behavior'];
+}
+
+function normalizeReceiptSummary(summary, prompt, filesChanged = []) {
+    const source = summary && typeof summary === 'object' ? summary : {};
+    return {
+        ...source,
+        changedAreas: Array.isArray(source.changedAreas) && source.changedAreas.length
+            ? unique(source.changedAreas)
+            : inferChangedAreas(filesChanged, prompt),
+        preservedAreas: Array.isArray(source.preservedAreas) && source.preservedAreas.length
+            ? unique(source.preservedAreas)
+            : inferPreservedAreas(prompt),
+        previewStatus: source.previewStatus || 'Loaded, not visually verified',
+        ranBackend: source.ranBackend !== false,
+        nextActions: Array.isArray(source.nextActions) && source.nextActions.length
+            ? source.nextActions
+            : ['Try it', 'Keep editing', 'Save ZIP']
+    };
+}
+
 /**
  * @param {{path:string,content:string}[]} prevFiles
  * @param {{path:string,content:string}[]} nextFiles
@@ -31,7 +85,11 @@ function lineDelta(prevContent, nextContent) {
  */
 export function buildChangeSummary(prevFiles, nextFiles, prompt, backendSummary = null) {
     if (backendSummary && typeof backendSummary === 'object' && backendSummary.headline) {
-        return { ...backendSummary, source: 'backend' };
+        return normalizeReceiptSummary(
+            { ...backendSummary, source: 'backend' },
+            prompt,
+            backendSummary.filesChanged || []
+        );
     }
     const prevMap = new Map((prevFiles || []).map(f => [f.path, f.content]));
     const nextMap = new Map((nextFiles || []).map(f => [f.path, f.content]));
@@ -63,10 +121,10 @@ export function buildChangeSummary(prevFiles, nextFiles, prompt, backendSummary 
 
     const changes = filesChanged.slice(0, 4).map(file => ({
         area: file.kind === 'added' ? 'New file' : file.kind === 'removed' ? 'Removed' : 'Updated',
-        what: `${file.path} (+${file.added} −${file.removed})`
+        what: `${file.path} (+${file.added} -${file.removed})`
     }));
 
-    return {
+    return normalizeReceiptSummary({
         source: 'frontend-diff',
         headline,
         changes,
@@ -74,5 +132,5 @@ export function buildChangeSummary(prevFiles, nextFiles, prompt, backendSummary 
             ? [`${untouchedFiles.length} of ${nextMap.size} files unchanged`]
             : [],
         filesChanged
-    };
+    }, prompt, filesChanged);
 }

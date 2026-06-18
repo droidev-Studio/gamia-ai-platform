@@ -1,0 +1,1083 @@
+/* PC generated workspace IA.
+   Mobile and compact layouts keep the legacy Chat/Preview switch from style.css. */
+
+@media (min-width: 1280px) {
+    .generated-game-page.generated-workspace-pc .generated-page-layout {
+        display: grid !important;
+        grid-template-columns: var(--pc-history-width, 260px) var(--pc-chat-width, 380px) minmax(var(--pc-preview-min, 0px), 1fr) var(--pc-tools-width, 320px) !important;
+    }
+
+    body.game-edit-workspace-active {
+        --pc-history-width: 260px;
+        --pc-chat-width: 380px;
+        --pc-tools-width: 320px;
+        --pc-preview-min: 0px;
+        --pc-topbar-height: 56px;
+        --pc-divider: rgba(232, 234, 240, 0.16);
+        --pc-bg: #0B0D12;
+        --pc-panel: #0E1117;
+        --pc-panel-strong: #151922;
+        --pc-text: #e8eaf0;
+        --pc-muted: #9aa0ae;
+        background: var(--pc-bg) !important;
+        overflow: hidden !important;
+    }
+
+    body.game-edit-workspace-active .chat-history {
+        --chat-stage-width: 100vw !important;
+        --center-chat-width: 100vw !important;
+        width: 100vw !important;
+        max-width: 100vw !important;
+        height: 100dvh !important;
+        margin: 0 !important;
+        padding: 0 !important;
+        overflow: hidden !important;
+        background: var(--pc-bg) !important;
+    }
+
+    body.game-edit-workspace-active .chat-message.has-game-workspace,
+    body.game-edit-workspace-active .chat-message.has-game-workspace .chat-content-wrap,
+    body.game-edit-workspace-active .chat-message.has-game-workspace .chat-bubble,
+    body.game-edit-workspace-active .generation-result,
+    body.game-edit-workspace-active .generation-result > .generated-game-page {
+        width: 100vw !important;
+        max-width: 100vw !important;
+        height: 100dvh !important;
+        min-height: 100dvh !important;
+        margin: 0 !important;
+        padding: 0 !important;
+        overflow: hidden !important;
+    }
+
+    body.game-edit-workspace-active .chat-message.has-game-workspace {
+        position: fixed !important;
+        inset: 0 !important;
+        display: block !important;
+    }
+
+    body.game-edit-workspace-active .chat-message.has-game-workspace .chat-bubble,
+    body.game-edit-workspace-active .generation-result {
+        display: block !important;
+        border: 0 !important;
+        border-radius: 0 !important;
+        background: transparent !important;
+    }
+
+    body.game-edit-workspace-active .generated-game-page.generated-workspace-pc {
+        position: relative !important;
+        display: grid !important;
+        grid-template-rows: var(--pc-topbar-height) minmax(0, 1fr) !important;
+        width: 100vw !important;
+        height: 100dvh !important;
+        min-height: 100dvh !important;
+        max-height: 100dvh !important;
+        color: var(--pc-text) !important;
+        background:
+            radial-gradient(circle at 60% 0%, rgba(94, 231, 255, 0.08), transparent 28%),
+            var(--pc-bg) !important;
+        overflow: hidden !important;
+    }
+
+    body.game-edit-workspace-active .generated-game-page .workspace-topbar {
+        grid-row: 1 !important;
+        display: grid !important;
+        grid-template-columns: var(--pc-history-width) minmax(280px, 1fr) auto !important;
+        align-items: center !important;
+        gap: 16px !important;
+        min-height: var(--pc-topbar-height) !important;
+        padding: 0 18px !important;
+        border-bottom: 1px solid var(--pc-divider) !important;
+        background: rgba(7, 10, 18, 0.96) !important;
+        box-shadow: 0 12px 36px rgba(0, 0, 0, 0.28) !important;
+        position: relative !important;
+        z-index: 220 !important;
+    }
+
+    body.game-edit-workspace-active .workspace-topbar-brand {
+        display: inline-flex !important;
+        align-items: center !important;
+        gap: 12px !important;
+        min-width: 0 !important;
+    }
+
+    body.game-edit-workspace-active .workspace-topbar-brand strong,
+    body.game-edit-workspace-active .workspace-column-head > span {
+        color: var(--pc-text) !important;
+        font-size: 17px !important;
+        font-weight: 850 !important;
+        letter-spacing: 0 !important;
+    }
+
+    body.game-edit-workspace-active .workspace-close-btn {
+        min-width: 34px !important;
+        min-height: 34px !important;
+        border-radius: 999px !important;
+        border: 1px solid rgba(232, 234, 240, 0.14) !important;
+        background: rgba(255, 255, 255, 0.06) !important;
+        color: transparent !important;
+        font-size: 0 !important;
+        cursor: pointer !important;
+    }
+
+    body.game-edit-workspace-active .workspace-close-btn::before {
+        content: 'x' !important;
+        color: var(--pc-text) !important;
+        font-size: 22px !important;
+        line-height: 1 !important;
+    }
+
+    body.game-edit-workspace-active .workspace-topbar-title {
+        position: relative !important;
+        min-width: 0 !important;
+    }
+
+    body.game-edit-workspace-active .workspace-title-project-button,
+    body.game-edit-workspace-active .workspace-project-chip {
+        appearance: none !important;
+        border: 0 !important;
+        background: transparent !important;
+        color: inherit !important;
+        text-align: left !important;
+        cursor: pointer !important;
+    }
+
+    body.game-edit-workspace-active .workspace-title-project-button {
+        display: grid !important;
+        gap: 2px !important;
+        min-width: 0 !important;
+        padding: 0 !important;
+    }
+
+    body.game-edit-workspace-active .workspace-title-project-button small {
+        color: #5ee7ff !important;
+        font-size: 10px !important;
+        font-weight: 900 !important;
+        text-transform: uppercase !important;
+    }
+
+    body.game-edit-workspace-active .workspace-title-project-button strong {
+        color: var(--pc-text) !important;
+        font-size: 15px !important;
+        font-weight: 850 !important;
+        white-space: nowrap !important;
+        overflow: hidden !important;
+        text-overflow: ellipsis !important;
+    }
+
+    body.game-edit-workspace-active .workspace-artifact-status {
+        display: inline-flex !important;
+        gap: 8px !important;
+        color: var(--pc-muted) !important;
+        font-size: 11px !important;
+    }
+
+    body.game-edit-workspace-active .workspace-header-actions {
+        display: inline-flex !important;
+        align-items: center !important;
+        justify-content: end !important;
+        gap: 8px !important;
+        min-width: 0 !important;
+    }
+
+    body.game-edit-workspace-active .workspace-save-state {
+        color: var(--pc-muted) !important;
+        font-size: 12px !important;
+        font-weight: 750 !important;
+        white-space: nowrap !important;
+    }
+
+    body.game-edit-workspace-active .workspace-save-state::before {
+        content: '' !important;
+        display: inline-block !important;
+        width: 7px !important;
+        height: 7px !important;
+        margin-right: 7px !important;
+        border-radius: 999px !important;
+        background: #46d39a !important;
+        vertical-align: 1px !important;
+    }
+
+    body.game-edit-workspace-active .workspace-header-btn {
+        min-height: 34px !important;
+        border-radius: 999px !important;
+        border: 1px solid rgba(232, 234, 240, 0.12) !important;
+        padding: 0 13px !important;
+        color: var(--pc-text) !important;
+        background: rgba(255, 255, 255, 0.065) !important;
+        font-size: 12px !important;
+        font-weight: 800 !important;
+        white-space: nowrap !important;
+    }
+
+    body.game-edit-workspace-active .workspace-header-btn:disabled {
+        opacity: 0.48 !important;
+        cursor: not-allowed !important;
+    }
+
+    body.game-edit-workspace-active .workspace-share-export {
+        position: relative !important;
+        display: inline-flex !important;
+        align-items: center !important;
+    }
+
+    body.game-edit-workspace-active .workspace-share-menu {
+        position: absolute !important;
+        z-index: 150 !important;
+        top: calc(100% + 8px) !important;
+        right: 0 !important;
+        display: grid !important;
+        min-width: 160px !important;
+        padding: 8px !important;
+        gap: 6px !important;
+        border: 1px solid rgba(232, 234, 240, 0.14) !important;
+        border-radius: 8px !important;
+        background: rgba(8, 12, 24, 0.96) !important;
+        box-shadow: 0 18px 46px rgba(0, 0, 0, 0.36) !important;
+    }
+
+    body.game-edit-workspace-active .workspace-share-menu[hidden] {
+        display: none !important;
+    }
+
+    body.game-edit-workspace-active .workspace-share-menu button {
+        min-height: 34px !important;
+        border: 1px solid rgba(232, 234, 240, 0.12) !important;
+        border-radius: 8px !important;
+        padding: 0 10px !important;
+        color: var(--pc-text) !important;
+        background: rgba(255, 255, 255, 0.055) !important;
+        font-size: 12px !important;
+        font-weight: 800 !important;
+        text-align: left !important;
+        cursor: pointer !important;
+    }
+
+    body.game-edit-workspace-active .workspace-share-menu button:disabled {
+        opacity: 0.45 !important;
+        cursor: not-allowed !important;
+    }
+
+    body.game-edit-workspace-active .generated-game-page .generated-page-layout {
+        grid-row: 2 !important;
+        display: grid !important;
+        grid-template-columns: var(--pc-history-width) var(--pc-chat-width) minmax(var(--pc-preview-min), 1fr) var(--pc-tools-width) !important;
+        grid-template-rows: minmax(0, 1fr) !important;
+        gap: 0 !important;
+        min-height: 0 !important;
+        height: calc(100dvh - var(--pc-topbar-height)) !important;
+        padding: 0 !important;
+        overflow: hidden !important;
+    }
+
+    body.game-edit-workspace-active .workspace-four-column-shell {
+        display: contents !important;
+    }
+
+    body.game-edit-workspace-active .generated-game-page .change-history-sidebar,
+    body.game-edit-workspace-active .generated-game-page .chat-workfeed-column,
+    body.game-edit-workspace-active .generated-game-page .preview-play-column,
+    body.game-edit-workspace-active .generated-game-page .game-edit-sidebar {
+        position: relative !important;
+        inset: auto !important;
+        transform: none !important;
+        display: grid !important;
+        grid-template-rows: 58px minmax(0, 1fr) !important;
+        min-width: 0 !important;
+        min-height: 0 !important;
+        width: auto !important;
+        height: 100% !important;
+        max-height: none !important;
+        border: 0 !important;
+        border-radius: 0 !important;
+        box-shadow: none !important;
+        overflow: hidden !important;
+    }
+
+    body.game-edit-workspace-active .generated-game-page .change-history-sidebar {
+        grid-column: 1 !important;
+        grid-row: 1 !important;
+        background: #080d19 !important;
+        border-right: 1px solid var(--pc-divider) !important;
+    }
+
+    body.game-edit-workspace-active .generated-game-page .chat-workfeed-column {
+        grid-column: 2 !important;
+        grid-row: 1 !important;
+        background: #0a0712 !important;
+        border-right: 1px solid var(--pc-divider) !important;
+    }
+
+    body.game-edit-workspace-active .generated-game-page .preview-play-column {
+        grid-column: 3 !important;
+        grid-row: 1 !important;
+        background: #050b16 !important;
+        border-right: 1px solid var(--pc-divider) !important;
+        --preview-stage-width: min(720px, calc(100% - 48px)) !important;
+        align-content: stretch !important;
+    }
+
+    body.game-edit-workspace-active .generated-game-page .game-edit-sidebar {
+        grid-column: 4 !important;
+        grid-row: 1 !important;
+        background: #090613 !important;
+    }
+
+    body.game-edit-workspace-active .workspace-panel-head,
+    body.game-edit-workspace-active .workspace-column-head {
+        display: flex !important;
+        align-items: center !important;
+        justify-content: space-between !important;
+        gap: 12px !important;
+        min-height: 58px !important;
+        padding: 0 18px !important;
+        border-bottom: 1px solid var(--pc-divider) !important;
+        background: rgba(8, 13, 25, 0.88) !important;
+    }
+
+    body.game-edit-workspace-active .workspace-panel-head {
+        display: grid !important;
+        align-content: center !important;
+        justify-content: stretch !important;
+        gap: 2px !important;
+    }
+
+    body.game-edit-workspace-active .workspace-panel-head span {
+        color: var(--pc-text) !important;
+        font-size: 17px !important;
+        font-weight: 850 !important;
+        text-transform: none !important;
+    }
+
+    body.game-edit-workspace-active .workspace-panel-head small,
+    body.game-edit-workspace-active .workspace-column-head small {
+        color: var(--pc-muted) !important;
+        font-size: 12px !important;
+        font-weight: 650 !important;
+        line-height: 1.35 !important;
+    }
+
+    body.game-edit-workspace-active .preview-play-head small {
+        display: inline-flex !important;
+        align-items: center !important;
+        gap: 8px !important;
+        min-width: 0 !important;
+    }
+
+    body.game-edit-workspace-active [data-workspace-source-evidence] {
+        font-style: normal !important;
+        color: rgba(94, 231, 255, 0.86) !important;
+        white-space: nowrap !important;
+    }
+
+    body.game-edit-workspace-active .workspace-project-chip {
+        display: inline-flex !important;
+        align-items: center !important;
+        max-width: 250px !important;
+        min-height: 34px !important;
+        padding: 0 12px !important;
+        border-radius: 999px !important;
+        background: rgba(94, 231, 255, 0.12) !important;
+        color: #dff9ff !important;
+        font-size: 12px !important;
+        font-weight: 800 !important;
+        white-space: nowrap !important;
+        overflow: hidden !important;
+        text-overflow: ellipsis !important;
+    }
+
+    body.game-edit-workspace-active .generated-game-page .workspace-panel-toggle,
+    body.game-edit-workspace-active .generated-game-page .mobile-game-preview-toggle,
+    body.game-edit-workspace-active .generated-game-page .generated-view-switch {
+        display: none !important;
+    }
+
+    body.game-edit-workspace-active .change-history-list,
+    body.game-edit-workspace-active .game-preview-chat-panel,
+    body.game-edit-workspace-active .game-edit-module {
+        min-height: 0 !important;
+        overflow-y: auto !important;
+        scrollbar-width: thin !important;
+        scrollbar-color: rgba(94, 231, 255, 0.42) transparent !important;
+    }
+
+    body.game-edit-workspace-active .change-history-list {
+        display: grid !important;
+        align-content: start !important;
+        gap: 12px !important;
+        padding: 18px !important;
+    }
+
+    body.game-edit-workspace-active .change-history-record {
+        border-radius: 8px !important;
+        border: 1px solid rgba(232, 234, 240, 0.08) !important;
+        background: rgba(255, 255, 255, 0.045) !important;
+        color: var(--pc-text) !important;
+    }
+
+    body.game-edit-workspace-active .generated-game-page[data-generated-view='preview'] .generated-chat-view,
+    body.game-edit-workspace-active .generated-game-page[data-generated-view='chat'] .generated-preview-view,
+    body.game-edit-workspace-active .generated-game-page .generated-chat-view,
+    body.game-edit-workspace-active .generated-game-page .generated-preview-view {
+        display: grid !important;
+    }
+
+    body.game-edit-workspace-active .game-preview-chat-panel {
+        display: flex !important;
+        flex-direction: column !important;
+        gap: 16px !important;
+        height: 100% !important;
+        max-height: none !important;
+        padding: 20px 20px 132px !important;
+        border: 0 !important;
+        border-radius: 0 !important;
+        background:
+            radial-gradient(circle at 92% 4%, rgba(139, 92, 246, 0.11), transparent 34%),
+            #0a0712 !important;
+        box-shadow: none !important;
+    }
+
+    body.game-edit-workspace-active .preview-chat-title-row {
+        display: none !important;
+    }
+
+    body.game-edit-workspace-active .preview-chat-user-bubble {
+        align-self: flex-end !important;
+        max-width: 78% !important;
+        padding: 12px 14px !important;
+        border-radius: 14px 14px 4px 14px !important;
+        background: #171121 !important;
+        color: var(--pc-text) !important;
+        font-size: 14px !important;
+        line-height: 1.45 !important;
+    }
+
+    body.game-edit-workspace-active .preview-chat-time {
+        align-self: flex-end !important;
+        margin-top: -10px !important;
+        color: #646a78 !important;
+        font-size: 11px !important;
+    }
+
+    body.game-edit-workspace-active .preview-chat-assistant-note,
+    body.game-edit-workspace-active .preview-chat-edit-status {
+        color: var(--pc-text) !important;
+        font-size: 13px !important;
+        line-height: 1.55 !important;
+    }
+
+    body.game-edit-workspace-active .preview-chat-edit-status {
+        margin-top: auto !important;
+        padding: 12px 13px !important;
+        border-radius: 8px !important;
+        border: 1px solid rgba(232, 234, 240, 0.08) !important;
+        background: rgba(255, 255, 255, 0.045) !important;
+        color: var(--pc-muted) !important;
+    }
+
+    body.game-edit-workspace-active .workspace-prompt-chips {
+        display: flex !important;
+        flex-wrap: wrap !important;
+        gap: 8px !important;
+    }
+
+    body.game-edit-workspace-active .workspace-prompt-chip {
+        border-radius: 999px !important;
+        border: 1px solid rgba(94, 231, 255, 0.14) !important;
+        background: rgba(94, 231, 255, 0.08) !important;
+        color: #dff9ff !important;
+    }
+
+    body.game-edit-workspace-active .generated-preview-view.playable-preview-card {
+        align-self: stretch !important;
+        justify-self: stretch !important;
+        grid-template-rows: 58px auto minmax(0, 1fr) auto auto !important;
+        align-items: center !important;
+        padding: 0 !important;
+        min-width: 0 !important;
+        min-height: 0 !important;
+        width: 100% !important;
+        max-width: 100% !important;
+        border: 0 !important;
+        border-radius: 0 !important;
+        box-shadow: none !important;
+    }
+
+    body.game-edit-workspace-active .game-preview-viewport {
+        grid-row: 3 !important;
+        align-self: center !important;
+        justify-self: center !important;
+        min-width: 0 !important;
+        width: var(--preview-stage-width) !important;
+        max-width: var(--preview-stage-width) !important;
+        height: auto !important;
+        max-height: calc(100dvh - 210px) !important;
+        aspect-ratio: var(--preview-aspect, 16 / 9) !important;
+        margin: 0 auto !important;
+        border-radius: 8px !important;
+        border: 1px solid rgba(232, 234, 240, 0.12) !important;
+        background: #05070d !important;
+        box-shadow: 0 18px 46px rgba(0, 0, 0, 0.42) !important;
+        overflow: hidden !important;
+    }
+
+    body.game-edit-workspace-active .generated-game-page[data-preview-layout='portrait'] .game-preview-viewport,
+    body.game-edit-workspace-active .generated-game-page[data-preview-orientation='portrait'] .game-preview-viewport {
+        --preview-stage-width: min(420px, calc(100% - 48px)) !important;
+        width: var(--preview-stage-width) !important;
+        max-width: var(--preview-stage-width) !important;
+    }
+
+    body.game-edit-workspace-active .generated-game-page[data-preview-layout='portrait'] .preview-play-column,
+    body.game-edit-workspace-active .generated-game-page[data-preview-orientation='portrait'] .preview-play-column {
+        --preview-stage-width: min(420px, calc(100% - 48px)) !important;
+    }
+
+    body.game-edit-workspace-active .template-preview-frame,
+    body.game-edit-workspace-active .game-preview-canvas {
+        display: block !important;
+        width: 100% !important;
+        height: 100% !important;
+        border: 0 !important;
+        border-radius: 0 !important;
+        background: #05070d !important;
+    }
+
+    body.game-edit-workspace-active .workspace-stage-toolbar,
+    body.game-edit-workspace-active .preview-repair-actions {
+        display: grid !important;
+        box-sizing: border-box !important;
+        grid-template-columns: minmax(0, 1fr) auto !important;
+        align-items: center !important;
+        gap: 12px !important;
+        justify-self: center !important;
+        width: var(--preview-stage-width) !important;
+        max-width: var(--preview-stage-width) !important;
+        margin: 0 auto 18px !important;
+        padding: 10px !important;
+        border-radius: 8px !important;
+        border: 1px solid rgba(94, 231, 255, 0.14) !important;
+        background: rgba(8, 16, 30, 0.9) !important;
+    }
+
+    body.game-edit-workspace-active .workspace-stage-toolbar {
+        grid-row: 2 !important;
+        align-self: end !important;
+    }
+
+    body.game-edit-workspace-active .preview-repair-actions {
+        grid-row: 5 !important;
+    }
+
+    body.game-edit-workspace-active .preview-repair-actions[hidden] {
+        display: none !important;
+    }
+
+    body.game-edit-workspace-active .preview-repair-actions {
+        grid-template-columns: repeat(3, minmax(0, 1fr)) !important;
+    }
+
+    body.game-edit-workspace-active .workspace-stage-label {
+        display: grid !important;
+        gap: 2px !important;
+        min-width: 0 !important;
+    }
+
+    body.game-edit-workspace-active .workspace-stage-label span {
+        color: var(--pc-muted) !important;
+        font-size: 11px !important;
+        font-weight: 800 !important;
+        text-transform: uppercase !important;
+    }
+
+    body.game-edit-workspace-active .workspace-stage-label strong {
+        color: var(--pc-text) !important;
+        font-size: 13px !important;
+        font-weight: 850 !important;
+        overflow: hidden !important;
+        text-overflow: ellipsis !important;
+        white-space: nowrap !important;
+    }
+
+    body.game-edit-workspace-active .preview-card-actions {
+        display: grid !important;
+        grid-template-columns: repeat(3, minmax(96px, 1fr)) !important;
+        gap: 8px !important;
+    }
+
+    body.game-edit-workspace-active .game-preview-btn {
+        min-height: 36px !important;
+        border-radius: 999px !important;
+        border: 1px solid rgba(232, 234, 240, 0.12) !important;
+        background: rgba(255, 255, 255, 0.065) !important;
+        color: var(--pc-text) !important;
+        font-size: 12px !important;
+        font-weight: 800 !important;
+        white-space: nowrap !important;
+    }
+
+    body.game-edit-workspace-active .game-preview-btn-primary {
+        border-color: rgba(94, 231, 255, 0.34) !important;
+        background: linear-gradient(135deg, rgba(94, 231, 255, 0.78), rgba(139, 92, 246, 0.82)) !important;
+    }
+
+    body.game-edit-workspace-active .preview-layout-diagnostic {
+        margin: 0 24px 12px !important;
+        border-radius: 8px !important;
+        pointer-events: none !important;
+    }
+
+    body.game-edit-workspace-active .game-edit-tabs {
+        display: grid !important;
+        grid-template-columns: repeat(4, minmax(0, 1fr)) !important;
+        gap: 4px !important;
+        margin: 14px 14px 12px !important;
+        padding: 4px !important;
+        border-radius: 22px !important;
+        background: rgba(12, 16, 32, 0.9) !important;
+    }
+
+    body.game-edit-workspace-active .game-edit-tab {
+        min-height: 42px !important;
+        border-radius: 16px !important;
+        border: 0 !important;
+        padding: 0 6px !important;
+        font-size: 12px !important;
+        font-weight: 850 !important;
+    }
+
+    body.game-edit-workspace-active .game-edit-tab.active {
+        color: var(--pc-text) !important;
+        background: rgba(94, 231, 255, 0.14) !important;
+    }
+
+    body.game-edit-workspace-active .game-edit-tab.is-locked {
+        opacity: 0.45 !important;
+        cursor: not-allowed !important;
+    }
+
+    body.game-edit-workspace-active .game-edit-module {
+        margin: 0 14px 14px !important;
+        padding: 0 !important;
+    }
+
+    body.game-edit-workspace-active .workspace-sidebar-mode-panel,
+    body.game-edit-workspace-active .workspace-numeric-head,
+    body.game-edit-workspace-active .workspace-numeric-card,
+    body.game-edit-workspace-active .workspace-numeric-empty {
+        border-radius: 8px !important;
+        border: 1px solid rgba(232, 234, 240, 0.08) !important;
+        background: var(--pc-panel-strong) !important;
+        box-shadow: none !important;
+    }
+
+    body.game-edit-workspace-active .workspace-sidebar-mode-panel {
+        margin: 12px 14px 14px !important;
+    }
+
+    body.game-edit-workspace-active .chat-input-wrapper {
+        position: fixed !important;
+        z-index: 80 !important;
+        left: calc(var(--pc-history-width) + 18px) !important;
+        bottom: 10px !important;
+        width: calc(var(--pc-chat-width) - 36px) !important;
+        max-width: calc(var(--pc-chat-width) - 36px) !important;
+        margin: 0 !important;
+        padding: 0 !important;
+        border: 0 !important;
+        background: transparent !important;
+        backdrop-filter: none !important;
+    }
+
+    body.game-edit-workspace-active .chat-input-bar.unified-pill {
+        max-width: none !important;
+        min-height: 88px !important;
+        border-radius: 8px !important;
+        border: 1px solid rgba(94, 231, 255, 0.24) !important;
+        background: linear-gradient(180deg, rgba(14, 23, 35, 0.98), rgba(8, 16, 28, 0.98)) !important;
+        box-shadow: 0 12px 32px rgba(0, 0, 0, 0.36) !important;
+    }
+
+    body.game-edit-workspace-active .project-info-dropdown {
+        position: absolute !important;
+        z-index: 120 !important;
+        top: calc(100% + 10px) !important;
+        left: 0 !important;
+        width: min(420px, 42vw) !important;
+        display: grid !important;
+        gap: 14px !important;
+        padding: 16px !important;
+        border-radius: 8px !important;
+        border: 1px solid rgba(232, 234, 240, 0.16) !important;
+        background: rgba(9, 11, 18, 0.98) !important;
+        box-shadow: 0 24px 64px rgba(0, 0, 0, 0.48) !important;
+    }
+
+    body.game-edit-workspace-active .project-info-dropdown[hidden] {
+        display: none !important;
+    }
+
+    body.game-edit-workspace-active .project-info-head {
+        display: grid !important;
+        grid-template-columns: 1fr auto !important;
+        align-items: center !important;
+        gap: 12px !important;
+    }
+
+    body.game-edit-workspace-active .project-info-grid {
+        display: grid !important;
+        gap: 12px !important;
+    }
+
+    body.game-edit-workspace-active .project-cover {
+        overflow: hidden !important;
+        border-radius: 8px !important;
+        border: 1px solid rgba(94, 231, 255, 0.16) !important;
+        aspect-ratio: 16 / 9 !important;
+        background: linear-gradient(135deg, rgba(94, 231, 255, 0.14), rgba(139, 92, 246, 0.16)), #0a1220 !important;
+    }
+
+    body.game-edit-workspace-active .project-cover img,
+    body.game-edit-workspace-active .project-cover-fallback {
+        width: 100% !important;
+        height: 100% !important;
+    }
+
+    body.game-edit-workspace-active .project-cover img {
+        object-fit: cover !important;
+    }
+
+    body.game-edit-workspace-active .project-cover-fallback {
+        display: grid !important;
+        place-items: center !important;
+        align-content: center !important;
+        gap: 8px !important;
+        color: var(--pc-text) !important;
+        font-weight: 850 !important;
+    }
+
+    body.game-edit-workspace-active .project-info-field {
+        display: grid !important;
+        gap: 7px !important;
+    }
+
+    body.game-edit-workspace-active .project-info-field span {
+        color: var(--pc-muted) !important;
+        font-size: 11px !important;
+        font-weight: 850 !important;
+        text-transform: uppercase !important;
+    }
+
+    body.game-edit-workspace-active .project-info-field input,
+    body.game-edit-workspace-active .project-info-field textarea {
+        width: 100% !important;
+        border: 1px solid rgba(232, 234, 240, 0.12) !important;
+        border-radius: 8px !important;
+        background: rgba(255, 255, 255, 0.055) !important;
+        color: var(--pc-text) !important;
+        padding: 10px 12px !important;
+        font: inherit !important;
+    }
+
+    body.game-edit-workspace-active .project-info-field textarea {
+        min-height: 88px !important;
+        resize: vertical !important;
+        line-height: 1.45 !important;
+    }
+
+    body.game-edit-workspace-active .project-info-actions,
+    body.game-edit-workspace-active .project-info-head button {
+        display: flex !important;
+        align-items: center !important;
+        gap: 10px !important;
+    }
+
+    body.game-edit-workspace-active .project-info-actions button,
+    body.game-edit-workspace-active .project-info-head button,
+    body.game-edit-workspace-active .workspace-numeric-empty button {
+        min-height: 34px !important;
+        border-radius: 8px !important;
+        border: 1px solid rgba(232, 234, 240, 0.14) !important;
+        background: rgba(255, 255, 255, 0.06) !important;
+        color: var(--pc-text) !important;
+        padding: 0 12px !important;
+        font-weight: 800 !important;
+    }
+
+    body.game-edit-workspace-active .project-info-actions button:disabled {
+        opacity: 0.5 !important;
+    }
+
+    body.game-edit-workspace-active .generated-game-page.is-beginner-mode [data-edit-target-chip] {
+        display: none !important;
+    }
+
+    body.game-edit-workspace-active .workfeed-card {
+        border: 1px solid rgba(114, 224, 255, 0.2) !important;
+        border-radius: 16px !important;
+        padding: 16px !important;
+        background: rgba(10, 13, 26, 0.72) !important;
+        box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.05) !important;
+    }
+
+    body.game-edit-workspace-active .workfeed-head {
+        display: flex !important;
+        align-items: flex-start !important;
+        justify-content: space-between !important;
+        gap: 12px !important;
+    }
+
+    body.game-edit-workspace-active .workfeed-cancel-btn {
+        border: 1px solid rgba(255, 255, 255, 0.16) !important;
+        border-radius: 999px !important;
+        padding: 7px 12px !important;
+        color: rgba(255, 255, 255, 0.86) !important;
+        background: rgba(255, 255, 255, 0.07) !important;
+        cursor: pointer !important;
+    }
+
+    body.game-edit-workspace-active .workfeed-steps {
+        display: grid !important;
+        gap: 10px !important;
+        margin: 14px 0 0 !important;
+        padding: 0 !important;
+        list-style: none !important;
+    }
+
+    body.game-edit-workspace-active .workfeed-step {
+        display: grid !important;
+        grid-template-columns: 22px 1fr !important;
+        gap: 10px !important;
+    }
+
+    body.game-edit-workspace-active .workfeed-dot {
+        display: grid !important;
+        place-items: center !important;
+        width: 22px !important;
+        height: 22px !important;
+        border-radius: 999px !important;
+        color: #03101b !important;
+        background: rgba(114, 224, 255, 0.9) !important;
+        font-size: 10px !important;
+        font-weight: 900 !important;
+    }
+
+    body.game-edit-workspace-active .workfeed-step[data-status="queued"] .workfeed-dot,
+    body.game-edit-workspace-active .workfeed-step[data-status="skipped"] .workfeed-dot,
+    body.game-edit-workspace-active .workfeed-step[data-status="canceled"] .workfeed-dot {
+        color: rgba(255, 255, 255, 0.7) !important;
+        background: rgba(255, 255, 255, 0.14) !important;
+    }
+
+    body.game-edit-workspace-active .workfeed-step-line {
+        display: flex !important;
+        flex-wrap: wrap !important;
+        gap: 8px !important;
+        align-items: baseline !important;
+    }
+
+    body.game-edit-workspace-active .workfeed-step-line em,
+    body.game-edit-workspace-active .workfeed-step-main small {
+        color: var(--pc-muted) !important;
+        font-style: normal !important;
+    }
+
+    /* Cascade guard against older PC preview-focus rules that use :has(). */
+    body.game-edit-workspace-active:has(.generated-game-page.generated-workspace-pc) .chat-history,
+    body.game-edit-workspace-active:has(.generated-game-page.generated-workspace-pc) .chat-message.has-game-workspace,
+    body.game-edit-workspace-active:has(.generated-game-page.generated-workspace-pc) .chat-message.has-game-workspace .chat-content-wrap,
+    body.game-edit-workspace-active:has(.generated-game-page.generated-workspace-pc) .chat-message.has-game-workspace .chat-bubble,
+    body.game-edit-workspace-active:has(.generated-game-page.generated-workspace-pc) .generation-result,
+    body.game-edit-workspace-active:has(.generated-game-page.generated-workspace-pc) .generation-result > .generated-game-page.generated-workspace-pc {
+        width: 100vw !important;
+        max-width: 100vw !important;
+        height: 100dvh !important;
+        min-height: 100dvh !important;
+        max-height: 100dvh !important;
+        margin: 0 !important;
+        padding: 0 !important;
+        overflow: hidden !important;
+    }
+
+    body.game-edit-workspace-active:has(.generated-game-page.generated-workspace-pc) .chat-history,
+    body.game-edit-workspace-active:has(.generated-game-page.generated-workspace-pc) .chat-message.has-game-workspace {
+        position: fixed !important;
+        inset: 0 !important;
+        left: 0 !important;
+        top: 0 !important;
+    }
+
+    body.game-edit-workspace-active:has(.generated-game-page.generated-workspace-pc) .chat-message.has-game-workspace .chat-content-wrap,
+    body.game-edit-workspace-active:has(.generated-game-page.generated-workspace-pc) .chat-message.has-game-workspace .chat-bubble,
+    body.game-edit-workspace-active:has(.generated-game-page.generated-workspace-pc) .generation-result {
+        display: block !important;
+    }
+
+    body.game-edit-workspace-active:has(.generated-game-page.generated-workspace-pc) .generation-result > .generated-game-page.generated-workspace-pc {
+        position: relative !important;
+        display: grid !important;
+        grid-template-rows: var(--pc-topbar-height) minmax(0, 1fr) !important;
+        inset: auto !important;
+        color: var(--pc-text) !important;
+        background:
+            radial-gradient(circle at 60% 0%, rgba(94, 231, 255, 0.08), transparent 28%),
+            var(--pc-bg) !important;
+    }
+
+    body.game-edit-workspace-active:has(.generated-game-page.generated-workspace-pc) .generated-game-page.generated-workspace-pc .generated-page-layout {
+        display: grid !important;
+        grid-template-columns: var(--pc-history-width) var(--pc-chat-width) minmax(var(--pc-preview-min), 1fr) var(--pc-tools-width) !important;
+        grid-template-rows: minmax(0, 1fr) !important;
+        height: calc(100dvh - var(--pc-topbar-height)) !important;
+        min-height: 0 !important;
+        width: 100vw !important;
+        max-width: none !important;
+        padding: 0 !important;
+        gap: 0 !important;
+        overflow: hidden !important;
+    }
+
+    body.game-edit-workspace-active:has(.generated-game-page.generated-workspace-pc) .generated-game-page.generated-workspace-pc .change-history-sidebar,
+    body.game-edit-workspace-active:has(.generated-game-page.generated-workspace-pc) .generated-game-page.generated-workspace-pc .chat-workfeed-column,
+    body.game-edit-workspace-active:has(.generated-game-page.generated-workspace-pc) .generated-game-page.generated-workspace-pc .preview-play-column,
+    body.game-edit-workspace-active:has(.generated-game-page.generated-workspace-pc) .generated-game-page.generated-workspace-pc .game-edit-sidebar {
+        position: relative !important;
+        display: grid !important;
+        visibility: visible !important;
+        opacity: 1 !important;
+        min-width: 0 !important;
+        width: auto !important;
+        height: 100% !important;
+        max-height: none !important;
+        transform: none !important;
+    }
+
+    body.game-edit-workspace-active:has(.generated-game-page.generated-workspace-pc) .generated-game-page.generated-workspace-pc .change-history-sidebar {
+        grid-column: 1 !important;
+        grid-row: 1 !important;
+    }
+
+    body.game-edit-workspace-active:has(.generated-game-page.generated-workspace-pc) .generated-game-page.generated-workspace-pc .chat-workfeed-column {
+        grid-column: 2 !important;
+        grid-row: 1 !important;
+    }
+
+    body.game-edit-workspace-active:has(.generated-game-page.generated-workspace-pc) .generated-game-page.generated-workspace-pc .preview-play-column {
+        grid-column: 3 !important;
+        grid-row: 1 !important;
+    }
+
+    body.game-edit-workspace-active:has(.generated-game-page.generated-workspace-pc) .generated-game-page.generated-workspace-pc .game-edit-sidebar {
+        grid-column: 4 !important;
+        grid-row: 1 !important;
+    }
+
+    body.game-edit-workspace-active:has(.generated-game-page.generated-workspace-pc[data-generated-view="preview"]) .chat-history.chat-history,
+    body.game-edit-workspace-active:has(.generated-game-page.generated-workspace-pc[data-generated-view="preview"]) .chat-message.bot.has-game-workspace,
+    body.game-edit-workspace-active:has(.generated-game-page.generated-workspace-pc[data-generated-view="preview"]) .chat-message.bot.has-game-workspace .chat-content-wrap,
+    body.game-edit-workspace-active:has(.generated-game-page.generated-workspace-pc[data-generated-view="preview"]) .chat-message.bot.has-game-workspace .chat-bubble,
+    body.game-edit-workspace-active:has(.generated-game-page.generated-workspace-pc[data-generated-view="preview"]) .chat-message.bot.has-game-workspace .generation-result {
+        box-sizing: border-box !important;
+        width: 100vw !important;
+        max-width: 100vw !important;
+        min-width: 100vw !important;
+        height: 100dvh !important;
+        min-height: 100dvh !important;
+        max-height: 100dvh !important;
+        margin: 0 !important;
+        padding: 0 !important;
+    }
+
+    body.game-edit-workspace-active:has(.generated-game-page.generated-workspace-pc[data-generated-view="preview"]) .chat-history.chat-history,
+    body.game-edit-workspace-active:has(.generated-game-page.generated-workspace-pc[data-generated-view="preview"]) .chat-message.bot.has-game-workspace {
+        position: fixed !important;
+        inset: 0 !important;
+    }
+
+    body.game-edit-workspace-active:has(.generated-game-page.generated-workspace-pc[data-generated-view="preview"]) .generated-game-page.generated-workspace-pc .generated-page-layout.page-workbench > .playable-shell.generated-view-shell.preview-open.workspace-four-column-shell {
+        display: contents !important;
+        width: auto !important;
+        height: auto !important;
+        min-height: 0 !important;
+        max-height: none !important;
+        margin: 0 !important;
+        padding: 0 !important;
+        overflow: visible !important;
+    }
+
+    body.game-edit-workspace-active:has(.generated-game-page.generated-workspace-pc[data-generated-view="preview"][data-preview-orientation="landscape"]) .generated-game-page.generated-workspace-pc .generated-preview-view.preview-play-column.playable-preview-card.game-preview-column {
+        align-self: stretch !important;
+        justify-self: stretch !important;
+        width: 100% !important;
+        min-width: 0 !important;
+        max-width: 100% !important;
+    }
+
+    body.game-edit-workspace-active:has(.generated-game-page.generated-workspace-pc[data-generated-view="preview"][data-preview-orientation="landscape"]) .generated-game-page.generated-workspace-pc .preview-play-column .game-preview-viewport {
+        min-width: 0 !important;
+        width: var(--preview-stage-width) !important;
+        max-width: var(--preview-stage-width) !important;
+    }
+}
+
+@media (min-width: 1280px) and (max-width: 1439px) {
+    body.game-edit-workspace-active {
+        --pc-history-width: 260px;
+        --pc-chat-width: 380px;
+        --pc-tools-width: 320px;
+        --pc-preview-min: 0px;
+    }
+
+    body.game-edit-workspace-active .generated-game-page .workspace-topbar {
+        grid-template-columns: var(--pc-history-width) minmax(240px, 1fr) auto !important;
+    }
+
+    body.game-edit-workspace-active .generated-game-page .generated-page-layout,
+    body.game-edit-workspace-active:has(.generated-game-page.generated-workspace-pc) .generated-game-page.generated-workspace-pc .generated-page-layout {
+        grid-template-columns: var(--pc-history-width) var(--pc-chat-width) minmax(0, 1fr) var(--pc-tools-width) !important;
+    }
+
+    body.game-edit-workspace-active .workspace-topbar-actions {
+        gap: 6px !important;
+    }
+
+    body.game-edit-workspace-active .workspace-header-btn {
+        padding: 0 10px !important;
+    }
+}
+
+@media (min-width: 1440px) {
+    body.game-edit-workspace-active {
+        --pc-history-width: 280px;
+        --pc-chat-width: 420px;
+        --pc-tools-width: 340px;
+        --pc-preview-min: 400px;
+    }
+}
+
+@media (min-width: 1720px) {
+    body.game-edit-workspace-active {
+        --pc-history-width: 320px;
+        --pc-chat-width: 480px;
+        --pc-tools-width: 400px;
+        --pc-preview-min: 520px;
+    }
+}
+
+body.game-edit-workspace-active .generated-game-page.generated-workspace-pc[data-preview-orientation="landscape"] .preview-play-column {
+    --preview-stage-width: min(720px, calc(100% - 48px)) !important;
+}
+
+body.game-edit-workspace-active .generated-game-page.generated-workspace-pc[data-preview-orientation="portrait"] .preview-play-column {
+    --preview-stage-width: min(420px, calc(100% - 48px)) !important;
+}
+
+body.game-edit-workspace-active .generated-game-page.generated-workspace-pc[data-generated-view="preview"] .workspace-stage-toolbar,
+body.game-edit-workspace-active .generated-game-page.generated-workspace-pc[data-generated-view="preview"] .preview-repair-actions,
+body.game-edit-workspace-active .generated-game-page.generated-workspace-pc[data-generated-view="preview"] .game-preview-viewport {
+    box-sizing: border-box !important;
+    width: var(--preview-stage-width) !important;
+    min-width: 0 !important;
+    max-width: var(--preview-stage-width) !important;
+    margin-left: auto !important;
+    margin-right: auto !important;
+}

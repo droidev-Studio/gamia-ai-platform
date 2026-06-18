@@ -535,7 +535,7 @@ document.addEventListener('DOMContentLoaded', () => {
     const AI_PROFILE_TIMEOUT_MS = 20000;
     const AI_GAME_PLAN_TIMEOUT_MS = 45000;
     const AI_BULLET_PLAN_TIMEOUT_MS = 45000;
-    const AI_DIRECT_GENERATION_TIMEOUT_MS = 240000;
+    const AI_DIRECT_GENERATION_TIMEOUT_MS = 330000;
     const FRONTEND_APP_ID = 'droi-ai-direct-frontend';
     const FRONTEND_CONTRACT_VERSION = 'ai-direct-v1';
     const REQUIRED_BACKEND_SERVICE = 'droi-ai-direct-backend';
@@ -598,6 +598,7 @@ document.addEventListener('DOMContentLoaded', () => {
     async function loadRuntimeConfig() {
         const candidates = [];
         if (window.DROI_API_BASE) candidates.push(window.DROI_API_BASE);
+        if (isLocalHost) candidates.push(window.location.origin);
         try {
             const response = await fetch('droi-config.json', { cache: 'no-store' });
             if (response.ok) {
@@ -683,6 +684,7 @@ document.addEventListener('DOMContentLoaded', () => {
             defaultBaseUrl: 'https://dashscope-intl.aliyuncs.com/compatible-mode/v1',
             adapter: 'openai-compatible',
             models: [
+                { id: 'qwen-plus', label: 'Qwen Plus', reasoningEffort: 'none' },
                 { id: 'qwen3.7-max', label: 'Qwen3.7-Max', reasoningEffort: 'none' }
             ]
         },
@@ -748,11 +750,11 @@ document.addEventListener('DOMContentLoaded', () => {
     function createDefaultAIConfig() {
         return {
             version: 1,
-            activeProvider: 'openai',
+            activeProvider: 'qwen',
             providers: PROVIDER_ORDER.reduce((acc, id) => {
                 const meta = PROVIDER_META[id];
                 acc[id] = {
-                    enabled: id === 'openai',
+                    enabled: id === 'qwen',
                     baseUrl: meta.defaultBaseUrl,
                     currentModel: meta.models[0].id,
                     customModel: '',
@@ -1181,6 +1183,34 @@ document.addEventListener('DOMContentLoaded', () => {
         }
     }
 
+    function redactSensitiveText(value = '') {
+        return String(value || '')
+            .replace(/\bAuthorization\s*:\s*Bearer\s+[A-Za-z0-9._~+/=-]{8,}/gi, 'Authorization: Bearer [REDACTED]')
+            .replace(/\b(Bearer)\s+[A-Za-z0-9._~+/=-]{16,}/gi, '$1 [REDACTED]')
+            .replace(/\b(sk|pk|rk|xox[baprs]|gh[pousr])[-_][A-Za-z0-9_=-]{12,}/gi, '[REDACTED_TOKEN]')
+            .replace(/\b(AIza[0-9A-Za-z_-]{20,})\b/g, '[REDACTED_TOKEN]')
+            .replace(/\b([A-Za-z0-9_-]{24,}\.[A-Za-z0-9_-]{12,}\.[A-Za-z0-9_-]{12,})\b/g, '[REDACTED_TOKEN]')
+            .replace(/\b(api[-_ ]?key|secret|access[-_ ]?token|refresh[-_ ]?token|authorization|token)\s*[:=]\s*["']?[^"'\s,;]{8,}/gi, '$1=[REDACTED]');
+    }
+
+    function redactSensitiveDeep(value, seen = new WeakSet()) {
+        if (typeof value === 'string') return redactSensitiveText(value);
+        if (value == null || typeof value !== 'object') return value;
+        if (seen.has(value)) return undefined;
+        seen.add(value);
+        if (Array.isArray(value)) return value.map(item => redactSensitiveDeep(item, seen)).filter(item => item !== undefined);
+        const output = {};
+        Object.entries(value).forEach(([key, item]) => {
+            if (/api[-_]?key|authorization|secret|rawcredential|access[-_]?token|refresh[-_]?token/i.test(key)) {
+                output[key] = '[REDACTED]';
+                return;
+            }
+            const scrubbed = redactSensitiveDeep(item, seen);
+            if (scrubbed !== undefined) output[key] = scrubbed;
+        });
+        return output;
+    }
+
     function recordDiagnostic(type, detail = {}) {
         if (!window.droiDiagnosticsEnabled) return;
         const records = readDiagnostics();
@@ -1189,7 +1219,7 @@ document.addEventListener('DOMContentLoaded', () => {
             type,
             build: APP_SCRIPT_BUILD,
             path: window.location.pathname,
-            detail
+            detail: redactSensitiveDeep(detail)
         };
         records.push(entry);
         const next = writeDiagnostics(records);
@@ -1590,7 +1620,11 @@ document.addEventListener('DOMContentLoaded', () => {
         if (!Array.isArray(parsed.capability.blockedReasons)) {
             parsed.capability.blockedReasons = parsed.capability.reason ? [parsed.capability.reason] : [];
         }
-        parsed.generationDecision = null;
+        parsed.generationDecision = (parsed.generationDecision && typeof parsed.generationDecision === 'object')
+            ? parsed.generationDecision
+            : ((parsed.gameGenerationDecision && typeof parsed.gameGenerationDecision === 'object')
+                ? parsed.gameGenerationDecision
+                : ((parsed.templateDecision && typeof parsed.templateDecision === 'object') ? parsed.templateDecision : null));
         parsed.gameGenerationDecision = null;
         parsed.visualDecision = null;
         return parsed;
@@ -1778,6 +1812,13 @@ document.addEventListener('DOMContentLoaded', () => {
         });
     }
 
+    function selectPreferredPlatformModel(defaultId = '') {
+        if (!platformModels.length) return null;
+        const preferred = platformModels.find(item => item.providerId === 'qwen' && item.modelId === 'qwen-plus');
+        if (preferred) return preferred;
+        return platformModels.find(item => item.id === defaultId || item.modelId === defaultId) || platformModels[0];
+    }
+
     async function loadPlatformModels() {
         try {
             platformModelsLoadError = null;
@@ -1798,7 +1839,7 @@ document.addEventListener('DOMContentLoaded', () => {
 
             if (platformModels.length) {
                 const defaultId = data.defaultModel || data.defaultModelId;
-                const defaultModel = platformModels.find(item => item.id === defaultId || item.modelId === defaultId) || platformModels[0];
+                const defaultModel = selectPreferredPlatformModel(defaultId);
                 applyModelSelection(defaultModel);
             }
         } catch (error) {
@@ -1818,16 +1859,71 @@ document.addEventListener('DOMContentLoaded', () => {
         if (platformTemplatesLoadPromise) return platformTemplatesLoadPromise;
         platformTemplatesLoadPromise = (async () => {
             platformTemplatesLoadError = null;
-            platformTemplateStatus = {
-                bucketConfigured: false,
-                bucketName: '',
-                templates: [],
-                artSkills: [],
-                gamePlanningSkills: [],
-                knowledgeBase: [],
-                hybridModifiers: []
-            };
-            platformTemplatesLoaded = true;
+            const ready = window.__DROI_RUNTIME_CONFIG && window.__DROI_RUNTIME_CONFIG.ready
+                ? window.__DROI_RUNTIME_CONFIG.ready
+                : {};
+            const templateRegistrySupported = Boolean(
+                (ready.capabilities && ready.capabilities.templateRegistry === true) ||
+                (ready.endpoints && ready.endpoints.templatesStatus)
+            );
+            if (!templateRegistrySupported) {
+                platformTemplateStatus = {
+                    bucketConfigured: false,
+                    bucketName: '',
+                    templates: [],
+                    artSkills: [],
+                    supportedArtSkills: [],
+                    gamePlanningSkills: [],
+                    knowledgeBase: [],
+                    hybridModifiers: [],
+                    capabilitySource: 'backend-capability-unavailable',
+                    schemaVersion: 1
+                };
+                platformTemplatesLoaded = true;
+                return;
+            }
+            try {
+                const response = await fetch(apiUrl('/api/templates/status'), {
+                    cache: 'no-store',
+                    credentials: 'include'
+                });
+                if (!response.ok) {
+                    throw new Error(`GET /api/templates/status returned HTTP ${response.status}`);
+                }
+                const data = await response.json();
+                platformTemplateStatus = {
+                    bucketConfigured: Boolean(data.bucketConfigured),
+                    bucketName: data.bucketName || '',
+                    templates: Array.isArray(data.templates) ? data.templates : [],
+                    artSkills: Array.isArray(data.artSkills) ? data.artSkills : [],
+                    supportedArtSkills: Array.isArray(data.supportedArtSkills) ? data.supportedArtSkills : [],
+                    gamePlanningSkills: Array.isArray(data.gamePlanningSkills) ? data.gamePlanningSkills : [],
+                    knowledgeBase: Array.isArray(data.knowledgeBase) ? data.knowledgeBase : [],
+                    hybridModifiers: Array.isArray(data.hybridModifiers) ? data.hybridModifiers : [],
+                    capabilitySource: data.capabilitySource || 'backend-template-registry',
+                    schemaVersion: data.schemaVersion || 1
+                };
+            } catch (error) {
+                platformTemplatesLoadError = error;
+                platformTemplateStatus = {
+                    bucketConfigured: false,
+                    bucketName: '',
+                    templates: [],
+                    artSkills: [],
+                    supportedArtSkills: [],
+                    gamePlanningSkills: [],
+                    knowledgeBase: [],
+                    hybridModifiers: [],
+                    capabilitySource: 'unavailable',
+                    schemaVersion: 1
+                };
+                recordDiagnostic('templates_fetch_failed', {
+                    phase: 'template registry',
+                    message: error && (error.message || String(error))
+                });
+            } finally {
+                platformTemplatesLoaded = true;
+            }
         })().finally(() => {
             platformTemplatesLoadPromise = null;
         });
@@ -1886,11 +1982,17 @@ document.addEventListener('DOMContentLoaded', () => {
     }
 
     function getPlatformTemplates() {
-        return [];
+        return Array.isArray(platformTemplateStatus.templates) ? platformTemplateStatus.templates : [];
     }
 
     function getTemplateStatus(templateId) {
-        return null;
+        const id = normalizeTemplateId(templateId);
+        if (!id) return null;
+        return getPlatformTemplates().find(template =>
+            normalizeTemplateId(template.id) === id ||
+            normalizeTemplateId(template.templateId) === id ||
+            normalizeTemplateId(template.type) === id
+        ) || null;
     }
 
     function collectTemplateMetadataList(status, keys) {
@@ -1928,39 +2030,47 @@ document.addEventListener('DOMContentLoaded', () => {
     }
 
     function getPublishedTemplateStatus(templateId) {
-        return null;
+        const status = getTemplateStatus(templateId);
+        return status && status.published !== false ? status : null;
     }
 
     function isCompileReadyRuntimeTemplate(templateId) {
-        return true;
+        const status = getPublishedTemplateStatus(templateId);
+        return Boolean(status && status.compileReady === true);
     }
 
     function getTemplateDisplayLabel(templateId, fallbackLabel = '') {
-        return fallbackLabel || templateId || 'AI direct game';
+        const status = getTemplateStatus(templateId);
+        return fallbackLabel || (status && (status.label || status.gameType || status.id)) || templateId || 'AI direct game';
     }
 
     function getTemplateCatalogEntry(templateId) {
         const id = normalizeTemplateId(templateId);
-        const label = id || 'AI direct game';
+        const status = getTemplateStatus(id) || {};
+        const label = status.label || status.gameType || id || 'AI direct game';
         return {
             id,
             label,
-            gameType: label,
-            type: id.replace(/_/g, '-'),
-            keywords: [],
-            capabilityTags: [],
-            routingHints: {},
-            assetArchitecture: {},
-            supported: true,
-            reason: 'Game type is passed to AI direct generation as input.',
-            confidenceBoost: 0
+            gameType: status.gameType || label,
+            type: status.type || id.replace(/_/g, '-'),
+            keywords: Array.isArray(status.keywords) ? status.keywords : [],
+            capabilityTags: Array.isArray(status.capabilityTags) ? status.capabilityTags : [],
+            intentAliases: Array.isArray(status.intentAliases) ? status.intentAliases : [],
+            routingHints: status.routingHints || {},
+            assetArchitecture: status.assetArchitecture || {},
+            supported: status.published !== false,
+            compileReady: status.compileReady === true,
+            reason: status.reason || 'Backend template registry provided this capability.',
+            confidenceBoost: Number(status.confidenceBoost) || 0
         };
     }
 
     function getTemplateCapabilitySummary(templateId) {
+        const status = getTemplateStatus(templateId);
+        if (status && status.compileReady) return `${getTemplateDisplayLabel(templateId)} is ready for template-assisted compile.`;
         return templateId
-            ? `AI direct generation will use "${templateId}" only as a GameSpec hint.`
-            : 'AI direct generation accepts arbitrary GameSpec input.';
+            ? `AI Direct will use "${templateId}" only as a GameSpec hint.`
+            : 'AI Direct accepts arbitrary GameSpec input.';
     }
 
     function getAIDirectRequiredModules(templateId) {
@@ -1987,11 +2097,11 @@ document.addEventListener('DOMContentLoaded', () => {
     }
 
     function getAvailableGameTemplatesForAI() {
-        return [];
+        return getPlatformTemplates().filter(template => template && template.published !== false);
     }
 
     function getPlatformArtSkills() {
-        return [];
+        return Array.isArray(platformTemplateStatus.artSkills) ? platformTemplateStatus.artSkills : [];
     }
 
     function normalizeSkillId(value) {
@@ -1999,23 +2109,103 @@ document.addEventListener('DOMContentLoaded', () => {
     }
 
     function getAvailableArtSkillsForAI(templateId = '') {
-        return [];
+        const normalizedTemplateId = normalizeTemplateId(templateId);
+        return getPlatformArtSkills().filter(skill => {
+            if (!skill || skill.published === false || skill.compileReady === false) return false;
+            const supported = Array.isArray(skill.supportedTemplates) ? skill.supportedTemplates.map(normalizeTemplateId) : [];
+            return !normalizedTemplateId || !supported.length || supported.includes(normalizedTemplateId);
+        });
     }
 
     function resolveCompileArtSkillDecision(templateId, visualDecision = analysisState.visualDecision) {
-        return null;
+        const skills = getAvailableArtSkillsForAI(templateId);
+        if (!skills.length) return null;
+        const text = [
+            visualDecision && visualDecision.style,
+            visualDecision && visualDecision.summary,
+            getSpecIntentText(getCurrentGameSpec())
+        ].filter(Boolean).join(' ').toLowerCase();
+        const scored = skills.map(skill => {
+            const keywords = Array.isArray(skill.keywords) ? skill.keywords : [];
+            const score = keywords.filter(keyword => text.includes(String(keyword).toLowerCase())).length;
+            return { ...skill, score };
+        }).sort((a, b) => b.score - a.score);
+        const best = scored[0];
+        return best ? {
+            artSkillId: best.id,
+            label: best.label || best.id,
+            confidence: best.score > 0 ? 0.82 : 0.55,
+            reason: best.score > 0 ? 'Matched backend art skill keywords.' : 'Using first compile-ready backend art skill.'
+        } : null;
     }
 
     function getBackendTemplateRoutingCatalog() {
-        return [];
+        return getAvailableGameTemplatesForAI().map(template => ({
+            ...template,
+            id: normalizeTemplateId(template.id || template.templateId),
+            templateId: normalizeTemplateId(template.templateId || template.id),
+            label: template.label || template.gameType || template.id,
+            type: template.type || template.gameType || template.id,
+            keywords: collectTemplateRoutingKeywords(template),
+            compileReady: template.compileReady === true,
+            published: template.published !== false
+        })).filter(template => template.id);
     }
 
     function getRegisteredBackendTemplateRoutingCatalog() {
-        return [];
+        return getBackendTemplateRoutingCatalog().filter(template => template.published && template.compileReady);
     }
 
     function getTemplateAvailabilityError(decision) {
+        if (!decision || !decision.templateId || decision.templateId === 'ai_direct') return '';
+        const status = getTemplateStatus(decision.templateId);
+        if (!status) return 'Template is not present in the backend registry.';
+        if (status.published === false) return 'Template is not published.';
+        if (status.compileReady !== true) return 'Template is not compile-ready.';
         return '';
+    }
+
+    function normalizeAIGenerationDecision(rawDecision = null, spec = getCurrentGameSpec()) {
+        if (!rawDecision || typeof rawDecision !== 'object') return null;
+        const rawTemplateId = rawDecision.templateId ||
+            rawDecision.selectedTemplateId ||
+            rawDecision.template?.templateId ||
+            rawDecision.template?.id ||
+            '';
+        const templateId = normalizeTemplateId(rawTemplateId);
+        const mode = String(rawDecision.generationMode || rawDecision.mode || rawDecision.route || '').trim().toLowerCase();
+        const confidence = Math.max(0, Math.min(1, Number(rawDecision.confidence) || (templateId ? 0.86 : 0.72)));
+        if (templateId && templateId !== 'ai_direct') {
+            const status = getTemplateStatus(templateId);
+            if (!status || status.published === false || status.compileReady !== true) return null;
+            return {
+                canAutoGenerate: true,
+                templateId: status.id || status.templateId || templateId,
+                templateLabel: status.label || status.gameType || templateId,
+                templateGenre: status.type || status.gameType || spec.gameType || 'custom-html5-game',
+                generationMode: 'template_assisted',
+                normalizedGameType: spec.gameType || status.gameType || 'Custom HTML5 game',
+                locked: false,
+                confidence,
+                reason: rawDecision.reason || rawDecision.matchReason || 'Selected by the current AI analyze response.',
+                source: 'ai_analyze',
+                candidates: [status]
+            };
+        }
+        if (mode === 'template_assisted' || mode === 'template_compile' || mode === 'template') return null;
+        return {
+            canAutoGenerate: true,
+            templateId: 'ai_direct',
+            templateLabel: 'AI direct',
+            templateGenre: spec.gameType || 'custom-html5-game',
+            generationMode: 'ai_direct',
+            normalizedGameType: spec.gameType || 'Custom HTML5 game',
+            locked: false,
+            confidence,
+            reason: rawDecision.reason || 'The current AI analyze response did not select a compile-ready backend template.',
+            source: 'ai_analyze',
+            candidates: []
+        };
     }
 
     function scoreTemplateCatalogForText(text, catalog = []) {
@@ -2486,6 +2676,7 @@ document.addEventListener('DOMContentLoaded', () => {
         capability: null,
         analysisModelMeta: null,
         finalModelMeta: null,
+        flowMode: null,
         followUpCount: 0,
         workStartedAt: 0,
         aiRecommendationSnapshot: createAIRecommendationSnapshot(),
@@ -2526,6 +2717,8 @@ document.addEventListener('DOMContentLoaded', () => {
         events: [],
         nextId: 1
     };
+    let activeGenerationWorkfeed = null;
+    let activeGenerationCancelToken = null;
     let pendingAnalysisInstructions = [];
     let queuedGenerationInstructions = [];
     let bulletHellPlanState = {
@@ -2608,6 +2801,78 @@ document.addEventListener('DOMContentLoaded', () => {
         return analysisState[key] || chatSelections[key] || null;
     }
 
+    function optionTextForDisplay(value) {
+        return localizedValue(value).trim();
+    }
+
+    function optionMatchesSelection(option, selection, step) {
+        if (!option || !selection) return false;
+        const selectedParts = [
+            selection.label,
+            selection.value,
+            selection.desc,
+            selection.mechanic
+        ].map(optionTextForDisplay).filter(Boolean).map(normalizeAnswerText);
+        if (!selectedParts.length) return false;
+
+        const optionParts = [
+            getLocalizedOptionLabel(option, step),
+            getLocalizedOptionValueForDisplay(option, step),
+            getLocalizedOptionDesc(option, step),
+            option.mechanic
+        ].map(optionTextForDisplay).filter(Boolean).map(normalizeAnswerText);
+
+        return optionParts.some(part => part && selectedParts.includes(part));
+    }
+
+    function isCustomGameSpecSelection(selection, step, fallbackValue = '') {
+        if (!selection) return false;
+        const pool = Array.isArray(step && step.pool) ? step.pool : [];
+        if (pool.some(option => optionMatchesSelection(option, selection, step))) return false;
+        const label = optionTextForDisplay(selection.label || fallbackValue);
+        const value = optionTextForDisplay(selection.value || '');
+        const desc = optionTextForDisplay(selection.desc || '');
+        const mechanic = optionTextForDisplay(selection.mechanic || '');
+        const normalized = [label, value, desc, mechanic].filter(Boolean).map(normalizeAnswerText);
+        if (!normalized.length) return false;
+        const unique = [...new Set(normalized)];
+        return unique.length <= 2;
+    }
+
+    function getGameSpecDisplayRows(spec = getCurrentGameSpec()) {
+        return MODULE_STEPS.slice(1).map(step => {
+            const selection = getModuleSelection(step.key);
+            const specValue = optionTextForDisplay(spec && spec[step.specKey]);
+            if (!selection && !specValue) return null;
+
+            const selectionLabel = optionTextForDisplay(selection ? getLocalizedOptionLabel(selection, step) : '');
+            const selectionMatchesSpec = !specValue || !selectionLabel || normalizeAnswerText(selectionLabel) === normalizeAnswerText(specValue);
+            const displaySelection = selection && selectionMatchesSpec ? selection : null;
+            const choiceLabel = optionTextForDisplay(displaySelection ? getLocalizedOptionLabel(displaySelection, step) : specValue) || specValue;
+            const detailParts = [
+                displaySelection ? getLocalizedOptionValueForDisplay(displaySelection, step) : '',
+                displaySelection ? getLocalizedOptionDesc(displaySelection, step) : '',
+                displaySelection ? displaySelection.mechanic : ''
+            ].map(optionTextForDisplay).filter(Boolean);
+            const uniqueDetails = [...new Set(detailParts.filter(detail => normalizeAnswerText(detail) !== normalizeAnswerText(choiceLabel)))];
+            const custom = isCustomGameSpecSelection(displaySelection, step, specValue);
+            const customText = choiceLabel || specValue;
+
+            return {
+                key: step.key,
+                specKey: step.specKey,
+                title: getLocalizedStepTitle(step.key),
+                label: custom ? 'Custom direction' : (choiceLabel || 'Not specified'),
+                value: custom ? customText : (uniqueDetails[0] || ''),
+                desc: custom ? 'Use this as a custom requirement.' : (uniqueDetails[1] || ''),
+                mechanic: custom ? '' : (uniqueDetails[2] || ''),
+                detail: custom
+                    ? [customText, 'Use this as a custom requirement.'].filter(Boolean).join(' ')
+                    : uniqueDetails.join(' ')
+            };
+        }).filter(Boolean);
+    }
+
     function promptIncludesAny(prompt, terms) {
         const normalized = normalizeAnswerText(prompt);
         return terms.some(term => {
@@ -2676,6 +2941,23 @@ document.addEventListener('DOMContentLoaded', () => {
         return true;
     }
 
+    function hasExplicitSkillTreePromptEvidence(prompt) {
+        return /\bskill tree|skill points?|talent tree|perk tree|ability tree\b/i.test(String(prompt || '')) ||
+            /\u6280\u80fd\u6811|\u5929\u8d4b\u6811/.test(String(prompt || ''));
+    }
+
+    function constrainImplicitProgressionSelection(prompt) {
+        const selection = getModuleSelection('progressionSystem');
+        if (!selection) return;
+        const label = normalizeAnswerText(selection.label || selection.value || '');
+        if (label !== normalizeAnswerText('Skill tree')) return;
+        if (hasExplicitSkillTreePromptEvidence(prompt)) return;
+        setModuleSelection('progressionSystem', findOptionByLabel(PROGRESSION_OPTIONS, 'Level-up choices') || PROGRESSION_OPTIONS[0], 'suggested', 0.7, false);
+        recordDiagnostic('analysis-progression-skill-tree-deferred', {
+            reason: 'Skill tree was not explicit in the user prompt; downgraded to first-playable progression.'
+        });
+    }
+
     function applyExplicitPromptOverrides(prompt) {
         const text = String(prompt || '');
         if (!text.trim()) return;
@@ -2698,7 +2980,9 @@ document.addEventListener('DOMContentLoaded', () => {
         if (/\bboss phases?\b|\bmultiple phases?\b|\bphased boss\b/i.test(text)) {
             setExplicitPromptSelection('mainChallenge', findOptionByLabel(MAIN_CHALLENGE_OPTIONS, 'Boss phases'), 0.97);
         }
-        if (/\blevel[-\s]?up choices?\b|\bchoose upgrades?\b|\bupgrade choices?\b|\bcollects? .* for upgrades?\b/i.test(text)) {
+        if (hasExplicitSkillTreePromptEvidence(text)) {
+            setExplicitPromptSelection('progressionSystem', findOptionByLabel(PROGRESSION_OPTIONS, 'Skill tree'), 0.97);
+        } else if (/\blevel[-\s]?up choices?\b|\bchoose upgrades?\b|\bupgrade choices?\b|\bcollects? .* for upgrades?\b/i.test(text)) {
             setExplicitPromptSelection('progressionSystem', findOptionByLabel(PROGRESSION_OPTIONS, 'Level-up choices'), 0.96);
         }
         const hasExplicitDifficulty = /\b(easy|casual|normal|medium|hard|intense|difficult|brutal|expert|nightmare|hardcore)\b/i.test(text);
@@ -2876,13 +3160,63 @@ document.addEventListener('DOMContentLoaded', () => {
     }
 
     function getNextMissingStep() {
-        if (Number(analysisState.followUpCount || 0) >= 2) return null;
+        if (analysisState.flowMode !== 'guided_game_spec' && Number(analysisState.followUpCount || 0) >= 2) return null;
         for (const key of DECISION_FOLLOWUP_PRIORITY) {
             const step = getStepByKey(key);
             const definition = getStepDefinition(step);
             if (definition && !isModuleSelectionComplete(definition)) return step;
         }
         return null;
+    }
+
+    function getNextWizardStep() {
+        for (let step = 1; step < MODULE_STEPS.length; step += 1) {
+            const definition = getStepDefinition(step);
+            if (definition && !chatSelections[definition.key]) return step;
+        }
+        return null;
+    }
+
+    function setGuidedWizardMode() {
+        analysisState.active = false;
+        analysisState.processing = false;
+        analysisState.revisionMode = false;
+        analysisState.flowMode = 'guided_game_spec';
+        analysisState.followUpCount = 0;
+        analysisState.background = null;
+        analysisState.generationDecision = null;
+        analysisState.gamePlanningDecision = null;
+        analysisState.visualDecision = null;
+        analysisState.capability = null;
+        analysisState.analysisModelMeta = null;
+        analysisState.finalModelMeta = null;
+        clearAIRecommendationSnapshot();
+        latestGamePlan = null;
+        latestGamePlanDraft = '';
+    }
+
+    function startGuidedGameSpecWizard(options = {}) {
+        clearInspirePromptTimer();
+        setGuidedWizardMode();
+        if (options.prefillKey && options.prefillItem) {
+            chatSelections[options.prefillKey] = options.prefillItem;
+        }
+        if (options.background) {
+            analysisState.background = String(options.background);
+        }
+        renderInspireProfileSidebar(true);
+
+        const nextStep = getNextWizardStep();
+        if (!nextStep) {
+            askFinalConfirmation();
+            return;
+        }
+
+        chatStep = nextStep;
+        const message = options.message || getModulePrompt(nextStep);
+        addBotMessage(message, () => {
+            regTimeout(() => renderChatOptions(nextStep), 160);
+        });
     }
 
     function getModulePrompt(step) {
@@ -3014,6 +3348,7 @@ document.addEventListener('DOMContentLoaded', () => {
 
         analysisState.active = true;
         analysisState.processing = true;
+        analysisState.flowMode = 'direct_prompt';
         MODULE_STEPS.slice(1).forEach(step => {
             analysisState[step.key] = null;
         });
@@ -3043,6 +3378,17 @@ document.addEventListener('DOMContentLoaded', () => {
             await withTimeout(analyzePromptWithAIIfAvailable(prompt), AI_ANALYSIS_TIMEOUT_MS, 'Game request analysis');
         } catch (error) {
             if (!analysisState.active || analysisState.workStartedAt !== runStartedAt) return;
+            if (applyRecoverablePromptAnalysisFallback(prompt, error)) {
+                analysisState.processing = false;
+                if (pendingMessage) pendingMessage.remove();
+                updateExecutionEvent(analysisState.executionEvents && analysisState.executionEvents.understanding, {
+                    status: 'warning',
+                    title: `Analyzed prompt locally - detected ${summarizeDetectedGameSpec(getCurrentGameSpec())}`,
+                    detail: buildGameSpecPlainText(getCurrentGameSpec())
+                });
+                continueClarification();
+                return;
+            }
             analysisState.processing = false;
             if (pendingMessage) pendingMessage.remove();
             updateExecutionEvent(analysisState.executionEvents && analysisState.executionEvents.understanding, {
@@ -3075,6 +3421,43 @@ document.addEventListener('DOMContentLoaded', () => {
             detail: buildGameSpecPlainText(getCurrentGameSpec())
         });
         continueClarification();
+    }
+
+    function applyRecoverablePromptAnalysisFallback(prompt, error) {
+        const text = String(prompt || '').trim();
+        if (!text) return false;
+        const localCapability = detectCapabilityExceeded(text);
+        if (localCapability.blocked) return false;
+        if (!/\b(game|2d|canvas|html5|bullet[\s-]?hell|shooter|arena|playable|browser)\b|游戏|玩法|生成/.test(text.toLowerCase())) {
+            return false;
+        }
+        const classified = classifyAIFlowError(error, 'Game request analysis');
+        if (classified.category === 'model_config_failure') return false;
+
+        applyLocalPromptAnalysis(text);
+        applyPromptPresetMatches(text);
+        applyP0ClosureDefaults(text);
+        constrainImplicitProgressionSelection(text);
+        applyExplicitPromptOverrides(text);
+        analysisState.background = text;
+        analysisState.generationDecision = {
+            generationMode: 'ai_direct',
+            templateId: null,
+            confidence: 0.62,
+            reason: 'Local GameSpec fallback after recoverable AI analysis failure.'
+        };
+        analysisState.gamePlanningDecision = null;
+        analysisState.visualDecision = null;
+        analysisState.capability = { supported: true, blockedReasons: [] };
+        analysisState.analysisModelMeta = null;
+        analysisState.aiRecommendationSnapshot = createAIRecommendationSnapshot();
+        recordDiagnostic('game-request-analysis-local-fallback', {
+            message: classified.message || (error && (error.message || String(error))),
+            code: classified.code || '',
+            prompt: text.slice(0, 600)
+        });
+        addExecutionEvent('AI analysis fallback', 'warning', 'The model analysis step failed, so a local GameSpec fallback was used for this clear browser-game request.', { open: true });
+        return true;
     }
 
     function scoreTemplatesForText(text) {
@@ -3280,7 +3663,7 @@ document.addEventListener('DOMContentLoaded', () => {
         const response = await aiService.stageChat('/api/ai/analyze-game-request', [
                 {
                     role: 'system',
-                    content: `You are a game requirements analyst. Extract only what is present or strongly implied. Return strict JSON only.
+                    content: `You are a game requirements analyst. Extract only what is present or strongly implied. Return strict JSON only. Do not include Markdown, prose, comments, or code fences. Keep all string values concise.
 Use this shape:
 {
   "modules": {
@@ -3295,6 +3678,7 @@ Use this shape:
   },
   "background": string|null,
   "missingFields": string[],
+  "generationDecision": {"generationMode": "ai_direct|template_assisted", "templateId": string|null, "confidence": number, "reason": string},
   "fieldSuggestions": {
     "type": {"options": string[], "recommendedIndex": number|null, "recommendedValue": string|null, "reason": string},
     "style": {"options": string[], "recommendedIndex": number|null, "recommendedValue": string|null, "reason": string},
@@ -3317,9 +3701,11 @@ AI direct generation:
 - Treat "no 3D", "without 3D", "avoid 3D", "不要 3D", and "不需要 3D" as a 2D generation constraint, not as a 3D request or 3D art style.
 - If the user explicitly asks to generate a 3D game, 3D world, 3D model game, or Three.js project, set capability.supported=false with blockedReasons including "3D generation is not available yet".
 - Preserve the requested gameType as ordinary GameSpec text. It is an input hint, not a gate.
+- generationDecision is optional. If you select template_assisted, templateId must exactly match one templateId from availableGameTemplates. If no listed template clearly fits, return generationMode="ai_direct" and templateId=null.
 - fieldSuggestions is optional. Only include a Recommended candidate when it is genuinely based on the user's prompt and extracted GameSpec.
 - Use these fieldSuggestions keys exactly: type, style, setting, coreGameplay, playerGoal, mainChallenge, progressionSystem, difficultyLevel.
 - If unsure for a field, set recommendedIndex to null and recommendedValue to null for that field.
+- Do not infer progressionSystem="Skill tree" unless the prompt explicitly says skill tree, talent tree, perk tree, ability tree, or 技能树. For simple arcade, bullet hell, shooter, or survival prompts, prefer score, timer, waves, pickups, or level-up choices.
 Treat genre conventions as suggested, not confirmed, unless the user explicitly stated them. Do not invent complete plans in this step.`
                 },
                 {
@@ -3335,13 +3721,14 @@ Treat genre conventions as suggested, not confirmed, unless the user explicitly 
                             progression: PROGRESSION_OPTIONS.map(item => item.value),
                             difficulty: DIFFICULTY_OPTIONS.map(item => item.value)
                         },
+                        availableGameTemplates: getAvailableGameTemplatesForAI().filter(item => item && item.published !== false && item.compileReady === true),
                         requestContext: buildAIRequestContext(prompt)
                     })
                 }
         ], {
             provider: activeModel.providerId,
             model: activeModel.modelId,
-            maxTokens: 1600,
+            maxTokens: 3000,
             phase: 'Game request analysis'
         });
 
@@ -3356,10 +3743,11 @@ Treat genre conventions as suggested, not confirmed, unless the user explicitly 
         applyExtractedModule('mainChallenge', modules.mainChallenge, MAIN_CHALLENGE_OPTIONS, 'desc');
         applyExtractedModule('progressionSystem', modules.progressionSystem, PROGRESSION_OPTIONS, 'desc');
         applyExtractedModule('difficultyLevel', modules.difficultyLevel, DIFFICULTY_OPTIONS, 'desc');
+        constrainImplicitProgressionSelection(prompt);
         applyExplicitPromptOverrides(prompt);
 
         analysisState.background = parsed.background || prompt;
-        analysisState.generationDecision = null;
+        analysisState.generationDecision = normalizeAIGenerationDecision(parsed.generationDecision, getCurrentGameSpec());
         analysisState.gamePlanningDecision = parsed.gamePlanningDecision || null;
         analysisState.visualDecision = null;
         analysisState.capability = parsed.capability || null;
@@ -3480,11 +3868,20 @@ Treat genre conventions as suggested, not confirmed, unless the user explicitly 
         )) {
             clearInspirePromptTimer();
             const decision = evaluateAIDirectCapability(getCurrentGameSpec());
-            showAIFlowError(buildUnsupportedTemplateError(decision), {
-                phase: 'AI direct capability',
-                onEditRequest: () => prepareP0RewriteRequest(decision)
-            });
-            return;
+            if (!decision.canAutoGenerate) {
+                showAIFlowError(buildUnsupportedTemplateError(decision), {
+                    phase: 'AI direct capability',
+                    onEditRequest: () => prepareP0RewriteRequest(decision)
+                });
+                return;
+            }
+            if (analysisState.capability && analysisState.capability.supported === false) {
+                analysisState.capability = {
+                    ...analysisState.capability,
+                    supported: true,
+                    overriddenByUserConstraint: true
+                };
+            }
         }
 
         const nextStep = getNextMissingStep();
@@ -3662,6 +4059,26 @@ Treat genre conventions as suggested, not confirmed, unless the user explicitly 
         ].join(' ');
     }
 
+    function templateToGameTypeOption(template) {
+        const label = getTemplateDirectionLabel(template);
+        return matchChoice(GAME_TYPES, label, 'mechanic') || {
+            label,
+            value: label,
+            mechanic: template.knowledgeSummary || label,
+            desc: template.knowledgeSummary || label
+        };
+    }
+
+    function continueWizardAfterGameTypePrefill(template) {
+        const typeOption = templateToGameTypeOption(template);
+        addUserMessage(getTemplateDirectionLabel(template));
+        startGuidedGameSpecWizard({
+            prefillKey: 'type',
+            prefillItem: typeOption,
+            message: `Great. We'll use ${escapeHtml(getLocalizedOptionLabel(typeOption, getStepByKey('type')))} as the Game Type. Now choose the Art Style.`
+        });
+    }
+
     function buildQuickTemplateCards(templates) {
         return templates.map((template, index) => {
             const title = getTemplateDirectionLabel(template);
@@ -3680,24 +4097,11 @@ Treat genre conventions as suggested, not confirmed, unless the user explicitly 
 
     async function renderQuickInspirationTemplates(resumeStep = 1) {
         if (isInspirationControlLocked()) return;
-        const pendingMessage = addBotMessage('', null, { pending: true, workType: 'thinking' });
-        try {
-            await ensurePlatformRegistriesReady({ requireModels: false, requireTemplates: false, timeoutMs: 8000 });
-        } catch (error) {
-            if (pendingMessage) pendingMessage.remove();
-            showAIFlowError(error, {
-                phase: 'Quick inspiration templates',
-                onRetry: () => renderQuickInspirationTemplates(resumeStep)
-            });
-            return;
-        }
-
         const templates = [
             { templateId: 'puzzle-adventure', label: 'Puzzle Adventure', gameType: 'Puzzle Adventure', knowledgeSummary: 'Explore, solve spatial rules, unlock exits, and keep every interaction readable.' },
             { templateId: 'cozy-management', label: 'Cozy Management', gameType: 'Cozy Management', knowledgeSummary: 'Gather resources, make choices, serve visitors, and grow a small loop over time.' },
             { templateId: 'arcade-action', label: 'Arcade Action', gameType: 'Arcade Action', knowledgeSummary: 'Move, dodge, score, upgrade, and chase a short-session mastery loop.' }
         ];
-        if (pendingMessage) pendingMessage.remove();
 
         addBotMessage([
             '<div class="inspire-profile-kicker">Quick inspiration</div>',
@@ -3710,11 +4114,14 @@ Treat genre conventions as suggested, not confirmed, unless the user explicitly 
                     const templateId = button.getAttribute('data-quick-template');
                     const template = templates.find(item => item.templateId === templateId);
                     if (!template || analysisState.active) return;
-                    const prompt = buildQuickTemplatePrompt(template);
-                    addUserMessage(getTemplateDirectionLabel(template));
-                    savedPrompt = prompt;
-                    saveToHistory(prompt);
-                    startAnalysisFlow(prompt);
+                    msgDiv.querySelectorAll('[data-quick-template]').forEach(btn => {
+                        btn.style.pointerEvents = 'none';
+                        btn.style.opacity = btn === button ? '1' : '0.5';
+                        btn.disabled = true;
+                        btn.setAttribute('aria-disabled', 'true');
+                        btn.classList.add('is-stale-inspire-control');
+                    });
+                    continueWizardAfterGameTypePrefill(template);
                 });
             });
         });
@@ -3947,6 +4354,32 @@ Treat genre conventions as suggested, not confirmed, unless the user explicitly 
         `;
     }
 
+    function recommendationSelection(value, pool, extraKey) {
+        const text = String(value || '').trim();
+        if (!text) return null;
+        return matchChoice(pool, text, extraKey) || { label: text, value: text, desc: text };
+    }
+
+    function prefillWizardFromProfileRecommendation(recommendation) {
+        const selections = {
+            type: recommendationSelection(recommendation.gameType || recommendation.templateId || recommendation.title, GAME_TYPES, 'mechanic'),
+            style: recommendationSelection(recommendation.artStyle, ART_STYLES),
+            setting: recommendationSelection(recommendation.gameSetting, SETTINGS, 'desc'),
+            coreGameplay: recommendationSelection(recommendation.coreGameplay, CORE_GAMEPLAY_OPTIONS, 'desc'),
+            playerGoal: recommendationSelection('Defeat every staged boss encounter', PLAYER_GOAL_OPTIONS, 'desc'),
+            mainChallenge: recommendationSelection('Boss phases and projectile patterns', MAIN_CHALLENGE_OPTIONS, 'desc'),
+            progressionSystem: recommendationSelection('Level-up choices and collectible power-ups', PROGRESSION_OPTIONS, 'desc'),
+            difficultyLevel: recommendationSelection(/hard|nightmare|expert/i.test(String(recommendation.reason || recommendation.description || '')) ? 'Hard' : 'Normal', DIFFICULTY_OPTIONS, 'desc')
+        };
+        Object.entries(selections).forEach(([key, value]) => {
+            if (value) chatSelections[key] = value;
+        });
+        startGuidedGameSpecWizard({
+            background: recommendation.description || recommendation.reason || '',
+            message: 'I filled in that direction as structured GameSpec. Review the remaining choices before creating the game.'
+        });
+    }
+
     function selectProfileRecommendation(index) {
         const recommendation = inspireProfileState.recommendations[index];
         if (!recommendation) return;
@@ -3954,12 +4387,7 @@ Treat genre conventions as suggested, not confirmed, unless the user explicitly 
         inspireProfileState.selectedRecommendation = recommendation;
         renderInspireProfileSidebar(true);
         addUserMessage(`${profileDirectionLabel(recommendation.direction)}: ${recommendation.title}`);
-        addBotMessage(profileText('continuePrompt'), () => {
-            const prompt = buildProfileRecommendationPrompt(recommendation, getProfilePayload());
-            savedPrompt = prompt;
-            saveToHistory(prompt);
-            startAnalysisFlow(prompt);
-        });
+        prefillWizardFromProfileRecommendation(recommendation);
     }
 
     function findAIDirectDirectionForRecommendation(raw = {}, index = 0) {
@@ -4100,17 +4528,7 @@ Treat genre conventions as suggested, not confirmed, unless the user explicitly 
     }
 
     function getGameSpecSidebarRows() {
-        return MODULE_STEPS.slice(1).map(step => {
-            const selection = getModuleSelection(step.key);
-            if (!selection) return null;
-            const label = getLocalizedOptionLabel(selection, step) || selection.label || selection.value || selection.desc || '';
-            const desc = getLocalizedOptionDesc(selection, step) || getLocalizedOptionValueForDisplay(selection, step) || '';
-            return {
-                title: getLocalizedStepTitle(step.key),
-                label,
-                desc: desc && desc !== label ? desc : ''
-            };
-        }).filter(Boolean);
+        return getGameSpecDisplayRows(getCurrentGameSpec());
     }
 
     function renderGameSpecSidebar(panel, openSidebar = false) {
@@ -4127,7 +4545,7 @@ Treat genre conventions as suggested, not confirmed, unless the user explicitly 
                 <div class="inspire-profile-tags">
                     <span class="inspire-profile-tag">${escapeHtml(row.label)}</span>
                 </div>
-                ${row.desc ? `<div class="gamespec-sidebar-desc">${escapeHtml(row.desc)}</div>` : ''}
+                ${row.detail ? `<div class="gamespec-sidebar-desc">${escapeHtml(row.detail)}</div>` : ''}
             </div>
         `).join('');
 
@@ -4532,7 +4950,7 @@ Treat genre conventions as suggested, not confirmed, unless the user explicitly 
     }
 
     function recordChatTurn(role, content, meta = {}) {
-        const text = compactPlainText(content, 1800);
+        const text = compactPlainText(redactSensitiveText(content), 1800);
         if (!text && !(meta.attachments && meta.attachments.length)) return;
         chatTranscript.push({
             role,
@@ -4545,6 +4963,7 @@ Treat genre conventions as suggested, not confirmed, unless the user explicitly 
 
     function buildAIRequestContext(userPrompt = '') {
         const activeModel = getActiveModelMeta();
+        const safePrompt = redactSensitiveText(userPrompt);
         return {
             currentModel: {
                 providerId: activeModel.providerId,
@@ -4552,13 +4971,14 @@ Treat genre conventions as suggested, not confirmed, unless the user explicitly 
                 modelId: activeModel.modelId,
                 modelLabel: activeModel.modelLabel || activeModel.label
             },
-            userPrompt,
-            chatContext: chatTranscript.slice(-12),
-            collectedGameSpec: getCurrentGameSpec(),
+            userPrompt: safePrompt,
+            chatContext: redactSensitiveDeep(chatTranscript.slice(-12)),
+            collectedGameSpec: redactSensitiveDeep(getCurrentGameSpec()),
             attachmentSummary: chatTranscript
                 .flatMap(turn => turn.attachments || [])
                 .slice(-8),
             selectedProfile: inspireProfileState.selectedRecommendation || null,
+            availableGameTemplates: getAvailableGameTemplatesForAI().filter(template => template && template.published !== false && template.compileReady === true),
             aiStages: {
                 analysisModel: analysisState.analysisModelMeta || null,
                 gamePlanModel: analysisState.finalModelMeta || null
@@ -4953,7 +5373,7 @@ Treat genre conventions as suggested, not confirmed, unless the user explicitly 
                 startAnalysisFlow(promptText);
                 return;
             }
-            if (shouldAnalyzeWizardFreeText(promptText, definition)) {
+            if (analysisState.flowMode !== 'guided_game_spec' && shouldAnalyzeWizardFreeText(promptText, definition)) {
                 savedPrompt = promptText;
                 startAnalysisFlow(promptText);
                 return;
@@ -5175,7 +5595,16 @@ Treat genre conventions as suggested, not confirmed, unless the user explicitly 
         };
     }
 
+    function isExecutionTimelineDebugVisible() {
+        try {
+            return new URLSearchParams(window.location.search).get('debug') === '1';
+        } catch (error) {
+            return false;
+        }
+    }
+
     function ensureExecutionTimeline() {
+        if (!isExecutionTimelineDebugVisible()) return executionTimelineState;
         installExecutionTimelineStyles();
         if (executionTimelineState.container && executionTimelineState.container.isConnected) return executionTimelineState;
         const msgDiv = document.createElement('div');
@@ -5201,6 +5630,7 @@ Treat genre conventions as suggested, not confirmed, unless the user explicitly 
     }
 
     function renderExecutionTimeline() {
+        if (!isExecutionTimelineDebugVisible()) return;
         const state = ensureExecutionTimeline();
         if (!state.list) return;
         state.list.innerHTML = state.events.map(event => `
@@ -5217,7 +5647,13 @@ Treat genre conventions as suggested, not confirmed, unless the user explicitly 
     }
 
     function addExecutionEvent(title, status = 'running', detail = '', options = {}) {
-        const state = ensureExecutionTimeline();
+        const state = executionTimelineState || {
+            container: null,
+            list: null,
+            events: [],
+            nextId: 1
+        };
+        executionTimelineState = state;
         const id = options.id || `exec-${state.nextId++}`;
         const event = {
             id,
@@ -5262,6 +5698,198 @@ Treat genre conventions as suggested, not confirmed, unless the user explicitly 
         chatHistory.appendChild(msgDiv);
         chatHistory.scrollTop = chatHistory.scrollHeight;
         return msgDiv;
+    }
+
+    function getWorkfeedApi() {
+        return window.DroiChat && window.DroiChat.workfeed ? window.DroiChat : null;
+    }
+
+    function createChatWorkfeed(options = {}) {
+        const api = getWorkfeedApi();
+        if (!api || typeof api.workfeed.createWorkfeedJob !== 'function' || typeof api.renderWorkfeedCard !== 'function') return null;
+        const job = api.workfeed.createWorkfeedJob(options);
+        const card = api.renderWorkfeedCard(job);
+        if (typeof options.onCancel === 'function') {
+            card.addEventListener('workfeed-cancel-request', (event) => {
+                event.preventDefault();
+                options.onCancel(event.detail || {});
+            });
+        }
+        const message = appendChatCard(card);
+        return { job, card, message };
+    }
+
+    function refreshChatWorkfeed(handle) {
+        const api = getWorkfeedApi();
+        if (!handle || !handle.card || !api || typeof api.updateWorkfeedCard !== 'function') return handle;
+        api.updateWorkfeedCard(handle.card, handle.job);
+        if (chatHistory) chatHistory.scrollTop = chatHistory.scrollHeight;
+        return handle;
+    }
+
+    function advanceChatWorkfeed(handle, stepId, updates = {}) {
+        const api = getWorkfeedApi();
+        if (!handle || !api || typeof api.workfeed.advanceWorkfeedStep !== 'function') return handle;
+        api.workfeed.advanceWorkfeedStep(handle.job, stepId, updates);
+        return refreshChatWorkfeed(handle);
+    }
+
+    function updateChatWorkfeedStep(handle, stepId, updates = {}) {
+        const api = getWorkfeedApi();
+        if (!handle || !api || typeof api.workfeed.updateWorkfeedStep !== 'function') return handle;
+        api.workfeed.updateWorkfeedStep(handle.job, stepId, updates);
+        return refreshChatWorkfeed(handle);
+    }
+
+    function failChatWorkfeed(handle, stepId, summary = '') {
+        const api = getWorkfeedApi();
+        if (!handle || !api || typeof api.workfeed.failWorkfeedJob !== 'function') return handle;
+        api.workfeed.failWorkfeedJob(handle.job, stepId, summary);
+        return refreshChatWorkfeed(handle);
+    }
+
+    function cancelChatWorkfeed(handle, summary = 'Generation canceled.') {
+        const api = getWorkfeedApi();
+        if (!handle || !api || typeof api.workfeed.cancelWorkfeedJob !== 'function') return handle;
+        api.workfeed.cancelWorkfeedJob(handle.job, summary);
+        return refreshChatWorkfeed(handle);
+    }
+
+    function createGenerationCancelledError() {
+        const error = new Error('Generation canceled by user.');
+        error.code = 'GENERATION_CANCELLED';
+        return error;
+    }
+
+    function isGenerationCancelled(error) {
+        return Boolean(error && (error.code === 'GENERATION_CANCELLED' || error.name === 'AbortError'));
+    }
+
+    function assertGenerationNotCancelled(cancelToken) {
+        if (cancelToken && cancelToken.cancelled) throw createGenerationCancelledError();
+    }
+
+    function completeChatWorkfeed(handle, receiptData = {}, handlers = {}) {
+        const api = getWorkfeedApi();
+        if (!handle || !handle.card || !api || typeof api.renderCompletionReceipt !== 'function') return handle;
+        if (typeof api.workfeed.completeWorkfeedJob === 'function') {
+            api.workfeed.completeWorkfeedJob(handle.job, receiptData);
+        }
+        const receipt = api.renderCompletionReceipt(receiptData, handlers);
+        handle.card.replaceWith(receipt);
+        handle.card = receipt;
+        if (chatHistory) chatHistory.scrollTop = chatHistory.scrollHeight;
+        return handle;
+    }
+
+    function previewStatusFromProject(project) {
+        const report = project && project.validationReport;
+        if (report && report.ok === false) return 'Validation needs review';
+        if (report && report.browserRender && report.browserRender.ok === true) return 'Playable preview verified';
+        if (report && report.ok === true) return 'Loaded, not visually verified';
+        return 'Loaded, not visually verified';
+    }
+
+    function workspaceProjectModeLabel(project = {}) {
+        const mode = String(project.generationMode || '').toLowerCase();
+        const trace = project.sourceTrace || (project.generationReport && project.generationReport.sourceTrace) || {};
+        const templateId = trace.templateId || project.templateId || (project.generationReport && project.generationReport.templateId) || '';
+        const modelMeta = project.modelMeta || {};
+        if (modelMeta.providerId === 'local' || modelMeta.modelId === 'workspace-demo' || mode === 'workspace_demo') {
+            return 'Local demo';
+        }
+        if (mode === 'template_assisted' || trace.templateUsed || templateId) {
+            return `Template assisted${templateId ? ` · ${templateId}` : ''}`;
+        }
+        const modelLabel = modelMetaDisplay(modelMeta) || 'Selected model';
+        return `AI Direct · ${modelLabel} · No template`;
+    }
+
+    function compactWorkspaceHistorySummary(record = {}) {
+        if (record.initial || String(record.version || '').toLowerCase() === 'v1') {
+            return 'Initial playable game generated from your prompt.';
+        }
+        const existing = String(record.summary || '').trim();
+        if (existing && existing.length <= 130 && !/^(Applied|AI edit requested|Update|Change|Make|Replace|Tune)\b/i.test(existing) && !/prompt|acceptance|constraint|diff|Beginner mode/i.test(existing)) {
+            return existing;
+        }
+        if (/failed|error/i.test(existing) || record.failed) {
+            return 'Edit failed; preview was not changed.';
+        }
+        const prompt = String(record.prompt || '').trim();
+        const lower = prompt.toLowerCase();
+        if (/publish|public link|share/i.test(lower)) return 'Published project and prepared sharing options.';
+        if (/zip|export|download/i.test(lower)) return 'Exported project files as a ZIP archive.';
+        if (/style|visual|art|color|palette|theme|gothic|neon|cozy|animal crossing|warmer|polish/i.test(lower)) {
+            return 'Updated visual style; preserved gameplay.';
+        }
+        if (/difficult|balance|tune|speed|damage|enemy|wave|fair|hard|easy/i.test(lower)) {
+            return 'Tuned gameplay balance; preserved playable preview.';
+        }
+        if (/control|input|keyboard|mouse|touch|feedback|feel/i.test(lower)) {
+            return 'Updated controls and feedback; preserved gameplay.';
+        }
+        if (/asset|media|sprite|character|player|audio|sound|image/i.test(lower)) {
+            return 'Updated project assets; preserved gameplay.';
+        }
+        if (/title|name|description|cover|metadata|project info/i.test(lower)) {
+            return 'Updated project information.';
+        }
+        const firstSentence = prompt.split(/(?<=[.!?。！？])\s+/)[0] || '';
+        if (firstSentence) {
+            return firstSentence.length > 118 ? `${firstSentence.slice(0, 115).trim()}...` : firstSentence;
+        }
+        return 'Workspace change applied to the playable preview.';
+    }
+
+    function buildGenerationCompletionReceipt(plan, durationMs = 0) {
+        const project = (plan && plan.generatedProject) || {};
+        const files = Array.isArray(project.codeFiles) ? project.codeFiles : [];
+        const generationReport = project.generationReport || (plan.aiDirectGeneration && plan.aiDirectGeneration.generationReport) || null;
+        const validationReport = project.validationReport || (plan.aiDirectGeneration && plan.aiDirectGeneration.validationReport) || null;
+        const modelMeta = project.modelMeta || (plan.aiDirectGeneration && plan.aiDirectGeneration.modelMeta) || null;
+        return {
+            badge: 'Generated',
+            title: 'Game created in the workspace',
+            summary: validationReport && validationReport.ok === false
+                ? 'The AI returned a project, but backend validation found issues to review.'
+                : 'The AI returned playable project files and the workspace was refreshed.',
+            durationMs,
+            changedAreas: ['Playable runtime', 'Game rules', 'Project files'],
+            preservedAreas: ['Selected model', 'Current GameSpec', 'Browser-safe preview boundary'],
+            previewStatus: previewStatusFromProject(project),
+            ranBackend: true,
+            filesUpdated: files.map(file => file.path || file.name).filter(Boolean),
+            nextActions: [
+                { id: 'preview', label: 'Preview', primary: true },
+                { id: 'edit', label: 'Keep editing' },
+                { id: 'save_zip', label: 'Save ZIP' }
+            ],
+            details: {
+                modelMeta,
+                validationReport,
+                generationReport,
+                sourceTrace: generationReport && generationReport.sourceTrace
+            }
+        };
+    }
+
+    function handleCompletionReceiptAction(actionId) {
+        const workspace = document.querySelector('[data-game-workspace]');
+        if (actionId === 'preview') {
+            const frame = workspace && workspace.querySelector('.template-preview-frame, .game-preview-canvas');
+            if (frame && frame.scrollIntoView) frame.scrollIntoView({ behavior: 'smooth', block: 'center' });
+            return;
+        }
+        if (actionId === 'edit') {
+            const input = workspace && workspace.querySelector('[data-preview-chat-input]');
+            if (input) input.focus();
+            return;
+        }
+        if (actionId === 'save_zip') {
+            const button = workspace && (workspace.querySelector('[data-workspace-export-zip]') || workspace.querySelector('[data-workspace-save]'));
+            if (button) button.click();
+        }
     }
 
     async function submitManualQueueEmail(email, controls = {}) {
@@ -5488,6 +6116,307 @@ Treat genre conventions as suggested, not confirmed, unless the user explicitly 
         return classified;
     }
 
+    const USER_INTENT_VALUES = new Set([
+        'generate_game',
+        'edit_game',
+        'bug_report',
+        'product_plan',
+        'question',
+        'mixed_context',
+        'unclear'
+    ]);
+
+    function normalizeIntentStringList(value) {
+        if (!Array.isArray(value)) return [];
+        return value
+            .map(item => redactSensitiveText(item).trim())
+            .filter(Boolean)
+            .slice(0, 8);
+    }
+
+    function extractLikelyPrimaryTask(input = '') {
+        const safe = redactSensitiveText(input).trim();
+        const lines = safe.split(/\r?\n/).map(line => line.trim()).filter(Boolean);
+        const taskSignals = /(请|帮我|需要|修复|处理|实现|新增|优化|改成|修改|生成|做一个|create|build|make|fix|implement|change|update|review)/i;
+        const candidates = lines.filter(line => taskSignals.test(line) && line.length <= 360);
+        if (candidates.length) return candidates[candidates.length - 1];
+        const sentenceCandidates = safe
+            .split(/(?<=[。！？.!?])\s+/)
+            .map(item => item.trim())
+            .filter(item => taskSignals.test(item) && item.length <= 420);
+        if (sentenceCandidates.length) return sentenceCandidates[sentenceCandidates.length - 1];
+        return safe.slice(0, 520);
+    }
+
+    function extractIntentCriteria(input = '') {
+        const safe = redactSensitiveText(input);
+        return safe
+            .split(/\r?\n/)
+            .map(line => line.replace(/^\s*[-*#\d.)]+\s*/, '').trim())
+            .filter(line => /(应|确认|通过|不|should|must|verify|test|acceptance|expected|no |not )/i.test(line))
+            .slice(0, 6);
+    }
+
+    function inferLocalUserIntent(input = '', options = {}) {
+        const safe = redactSensitiveText(input);
+        const longInput = safe.length > 900;
+        const task = extractLikelyPrimaryTask(safe);
+        const isWorkspace = options.source === 'workspace';
+        const hasGameSignals = /(\bgame\b|\b2d\b|\bbullet[\s-]?hell\b|roguelike|survival|tower|platformer|shooter|canvas|游戏|玩法|关卡|boss|敌人|美术)/i.test(safe);
+        const hasEditSignals = /(改成|修改|调整|优化|保持.*不变|玩法不变|change|update|make .* darker|same gameplay|edit)/i.test(safe);
+        const hasPlanSignals = /(summary|key changes|test plan|assumptions|计划|修复计划|验收|回归|静态检查|产品方案)/i.test(safe);
+        const hasBugSignals = /(bug|error|报错|异常|崩溃|失败|修复|broken|does not work|不可用)/i.test(safe);
+        const hasQuestionSignals = /^(\s*(why|what|how|can|should|为什么|怎么|如何|请问)\b|.*[?？]\s*$)/i.test(safe);
+        let primaryIntent = 'unclear';
+        let confidence = 0.42;
+        if (isWorkspace && hasEditSignals && hasGameSignals) {
+            primaryIntent = 'edit_game';
+            confidence = 0.78;
+        } else if (hasPlanSignals && (longInput || /test plan|key changes|assumptions|修复计划/i.test(safe))) {
+            primaryIntent = 'product_plan';
+            confidence = 0.82;
+        } else if (hasQuestionSignals && !/生成|做一个|create|build|make a game/i.test(safe)) {
+            primaryIntent = 'question';
+            confidence = 0.78;
+        } else if (isWorkspace && hasEditSignals) {
+            primaryIntent = 'edit_game';
+            confidence = 0.72;
+        } else if (hasBugSignals && !hasGameSignals) {
+            primaryIntent = 'bug_report';
+            confidence = 0.72;
+        } else if (hasGameSignals || /(生成|做一个|create|build|make).*(game|游戏)/i.test(safe)) {
+            primaryIntent = 'generate_game';
+            confidence = 0.82;
+        }
+        const mixed = longInput && [hasPlanSignals, hasBugSignals, hasGameSignals, hasQuestionSignals].filter(Boolean).length >= 2;
+        if (mixed) {
+            primaryIntent = primaryIntent === 'unclear' ? 'mixed_context' : primaryIntent;
+            confidence = Math.min(confidence, 0.76);
+        }
+        return normalizeUserIntent({
+            primaryIntent,
+            primaryTask: task || safe,
+            backgroundSummary: longInput ? compactPlainText(safe, 900) : '',
+            constraints: normalizeIntentStringList(safe.match(/(?:不要|不能|must not|do not|keep|保持|只|only)[^。.!?\n]{2,120}/gi) || []),
+            acceptanceCriteria: extractIntentCriteria(safe),
+            gameSpecHints: hasGameSignals ? { source: 'local_fallback' } : {},
+            editHints: hasEditSignals ? { source: 'local_fallback' } : {},
+            needsConfirmation: mixed || confidence < 0.78 || !['generate_game', 'edit_game'].includes(primaryIntent),
+            confidence,
+            clarifyingQuestion: primaryIntent === 'unclear'
+                ? 'Which single task should I focus on first?'
+                : 'Should I use this understanding as the task to continue?'
+        }, safe, options);
+    }
+
+    function normalizeUserIntent(raw = {}, sourceInput = '', options = {}) {
+        const primaryIntent = USER_INTENT_VALUES.has(raw.primaryIntent) ? raw.primaryIntent : 'unclear';
+        const confidence = Number.isFinite(Number(raw.confidence))
+            ? Math.max(0, Math.min(1, Number(raw.confidence)))
+            : 0.35;
+        const safeInput = redactSensitiveText(sourceInput);
+        const task = redactSensitiveText(raw.primaryTask || extractLikelyPrimaryTask(safeInput) || safeInput || 'Clarify the request.').slice(0, 1200);
+        const looksLikeLongMixedContext = safeInput.length > 900 &&
+            /(summary|key changes|test plan|assumptions|修复计划|产品方案|验收|回归|静态检查|bug|error)/i.test(safeInput);
+        const needsConfirmation = raw.needsConfirmation !== false ||
+            primaryIntent === 'mixed_context' ||
+            confidence < 0.78 ||
+            looksLikeLongMixedContext ||
+            (safeInput.length > 900 && !['generate_game', 'edit_game'].includes(primaryIntent));
+        return {
+            primaryIntent,
+            primaryTask: task,
+            backgroundSummary: redactSensitiveText(raw.backgroundSummary || '').slice(0, 1600),
+            constraints: normalizeIntentStringList(raw.constraints),
+            acceptanceCriteria: normalizeIntentStringList(raw.acceptanceCriteria),
+            gameSpecHints: redactSensitiveDeep(raw.gameSpecHints && typeof raw.gameSpecHints === 'object' ? raw.gameSpecHints : {}),
+            editHints: redactSensitiveDeep(raw.editHints && typeof raw.editHints === 'object' ? raw.editHints : {}),
+            needsConfirmation,
+            confidence,
+            clarifyingQuestion: raw.clarifyingQuestion == null ? null : redactSensitiveText(raw.clarifyingQuestion).slice(0, 400) || null,
+            source: options.source || 'home'
+        };
+    }
+
+    function buildIntentContinuationPrompt(intent, fallbackPrompt = '') {
+        const lines = [
+            intent.primaryTask || fallbackPrompt,
+            intent.backgroundSummary ? `Background summary: ${intent.backgroundSummary}` : '',
+            ...(intent.constraints || []).map(item => `Constraint: ${item}`),
+            ...(intent.acceptanceCriteria || []).map(item => `Acceptance: ${item}`)
+        ].filter(Boolean);
+        return redactSensitiveText(lines.join('\n')).trim() || redactSensitiveText(fallbackPrompt);
+    }
+
+    function buildIntentRequestPayload(input, options = {}) {
+        const safeInput = redactSensitiveText(input);
+        const workspace = options.workspace || document.querySelector('[data-game-workspace]');
+        const workspaceState = workspace ? {
+            mode: workspace.dataset.workspaceMode || '',
+            generatedView: workspace.dataset.generatedView || '',
+            selectedItemId: workspace.__selectedItemId || '',
+            activeToolTab: getWorkspaceState(workspace).activeToolTab || ''
+        } : null;
+        return redactSensitiveDeep({
+            userInput: safeInput,
+            pageState: {
+                source: options.source || 'home',
+                view: inspireView && inspireView.style.display !== 'none' ? 'chat' : 'home',
+                analysisActive: Boolean(analysisState.active),
+                analysisProcessing: Boolean(analysisState.processing)
+            },
+            existingGameSpec: getCurrentGameSpec(),
+            workspaceState,
+            recentChatSummary: chatTranscript.slice(-8)
+        });
+    }
+
+    async function understandUserIntent(input, options = {}) {
+        const safeInput = redactSensitiveText(input);
+        const fallback = () => inferLocalUserIntent(safeInput, options);
+        try {
+            const activeModel = requireActiveAIModel('User intent understanding');
+            const payload = buildIntentRequestPayload(safeInput, options);
+            const response = await withTimeout(aiService.stageChat('/api/ai/understand-user-intent', [
+                {
+                    role: 'system',
+                    content: `You are an intent router for a web game creation workspace. Return strict JSON only.
+Allowed primaryIntent values: generate_game, edit_game, bug_report, product_plan, question, mixed_context, unclear.
+Choose the latest or clearest actionable task when the input mixes background and instructions.
+Never copy secrets, API keys, Authorization headers, tokens, long logs, or unrelated full documents into the response.
+Use this exact shape:
+{
+  "primaryIntent": "generate_game|edit_game|bug_report|product_plan|question|mixed_context|unclear",
+  "primaryTask": "string",
+  "backgroundSummary": "string",
+  "constraints": ["string"],
+  "acceptanceCriteria": ["string"],
+  "gameSpecHints": {},
+  "editHints": {},
+  "needsConfirmation": true,
+  "confidence": 0.82,
+  "clarifyingQuestion": "string|null"
+}`
+                },
+                {
+                    role: 'user',
+                    content: JSON.stringify(payload)
+                }
+            ], {
+                provider: activeModel.providerId,
+                model: activeModel.modelId,
+                maxTokens: 900,
+                phase: 'User intent understanding'
+            }), 32000, 'User intent understanding');
+            const parsed = extractModelJsonObject(response.content, 'User intent understanding');
+            return normalizeUserIntent(parsed, safeInput, options);
+        } catch (error) {
+            recordDiagnostic('intent-router-fallback', {
+                source: options.source || 'home',
+                message: error && (error.message || String(error)),
+                status: error && error.status
+            });
+            return fallback();
+        }
+    }
+
+    function shouldAutoContinueIntent(intent, source = 'home') {
+        if (!intent || intent.needsConfirmation || intent.confidence < 0.78) return false;
+        if (source === 'workspace') return intent.primaryIntent === 'edit_game';
+        return intent.primaryIntent === 'generate_game';
+    }
+
+    function buildIntentSummaryHtml(intent) {
+        const constraints = (intent.constraints || []).map(item => `<li>${escapeHtml(item)}</li>`).join('');
+        const criteria = (intent.acceptanceCriteria || []).map(item => `<li>${escapeHtml(item)}</li>`).join('');
+        const label = String(intent.primaryIntent || 'unclear').replace(/_/g, ' ');
+        return [
+            '<div class="selection-summary intent-summary-card">',
+            '<div class="summary-title">Here is what I understood...</div>',
+            `<div class="summary-item"><strong>Task:</strong> ${escapeHtml(intent.primaryTask || 'Clarify the request.')}</div>`,
+            `<div class="summary-item"><strong>Intent:</strong> ${escapeHtml(label)} (${Math.round((intent.confidence || 0) * 100)}%)</div>`,
+            intent.backgroundSummary ? `<div class="summary-item"><strong>Background:</strong> ${escapeHtml(intent.backgroundSummary)}</div>` : '',
+            constraints ? `<div class="summary-item"><strong>Constraints:</strong><ul>${constraints}</ul></div>` : '',
+            criteria ? `<div class="summary-item"><strong>Acceptance criteria:</strong><ul>${criteria}</ul></div>` : '',
+            '<div class="summary-actions">',
+            '<button type="button" class="chat-action-btn chat-action-primary" data-intent-action="use">Use this task</button>',
+            '<button type="button" class="chat-action-btn chat-action-edit" data-intent-action="edit">Edit summary</button>',
+            '<button type="button" class="chat-action-btn" data-intent-action="question">Ask me one question</button>',
+            '<button type="button" class="chat-action-btn chat-action-exit" data-intent-action="start-over">Start over</button>',
+            '</div>',
+            '</div>'
+        ].join('');
+    }
+
+    function continueHomeIntent(intent, sourcePrompt) {
+        const prompt = buildIntentContinuationPrompt(intent, sourcePrompt);
+        if (intent.primaryIntent === 'generate_game' || /game|游戏|玩法|boss|2d|canvas/i.test(prompt)) {
+            const capability = detectCapabilityExceeded(prompt);
+            const explicitlyExcludes3D = requestExplicitlyExcludes3D(prompt);
+            if (!explicitlyExcludes3D && capability.blocked && capability.capabilityCode === 'requested_3d') {
+                const decision = {
+                    canAutoGenerate: false,
+                    capabilityCode: 'requested_3d',
+                    intentType: 'requested_3d',
+                    reason: capability.reason || 'Capability exceeded: 3d',
+                    fallbackMessage: "Sorry, Droi AI can't generate 3D games yet QAQ. Please try another 2D game idea, or leave your email and we'll follow up."
+                };
+                analysisState.capability = {
+                    supported: false,
+                    blockedReasons: [decision.reason]
+                };
+                showAIFlowError(buildUnsupportedTemplateError(decision), {
+                    phase: 'AI direct capability',
+                    onEditRequest: () => prepareP0RewriteRequest(decision)
+                });
+                return;
+            }
+            savedPrompt = prompt;
+            startAnalysisFlow(prompt);
+            return;
+        }
+        const question = intent.clarifyingQuestion || 'This does not look like a game generation request. Which game idea should I build from it?';
+        addBotMessage(question);
+        if (chatInputField) setChatInputValue(prompt, { focus: true, cursorToEnd: true });
+    }
+
+    function showIntentSummaryCard(intent, options = {}) {
+        analysisState.intentSummary = {
+            ...(analysisState.intentSummary || {}),
+            ...(intent && typeof intent === 'object' ? intent : {}),
+            rawPrompt: options.sourcePrompt || (analysisState.intentSummary && analysisState.intentSummary.rawPrompt) || ''
+        };
+        return addBotMessage(buildIntentSummaryHtml(intent), msgDiv => {
+            msgDiv.querySelectorAll('[data-intent-action]').forEach(button => {
+                button.addEventListener('click', () => {
+                    const action = button.dataset.intentAction;
+                    const prompt = buildIntentContinuationPrompt(intent, options.sourcePrompt || '');
+                    if (action === 'use') {
+                        analysisState.intentSummary = {
+                            ...(analysisState.intentSummary || {}),
+                            ...(intent && typeof intent === 'object' ? intent : {}),
+                            rawPrompt: options.sourcePrompt || (analysisState.intentSummary && analysisState.intentSummary.rawPrompt) || '',
+                            normalizedPrompt: prompt
+                        };
+                        msgDiv.querySelectorAll('[data-intent-action]').forEach(item => {
+                            item.disabled = true;
+                            item.style.pointerEvents = 'none';
+                        });
+                        if (typeof options.onUse === 'function') options.onUse(prompt, intent);
+                        else continueHomeIntent(intent, options.sourcePrompt || '');
+                    } else if (action === 'edit') {
+                        if (chatInputField) setChatInputValue(prompt, { focus: true, cursorToEnd: true });
+                    } else if (action === 'question') {
+                        addBotMessage(intent.clarifyingQuestion || 'Which single task should I focus on first?');
+                    } else if (action === 'start-over') {
+                        if (typeof options.onStartOver === 'function') options.onStartOver();
+                        else resetChat();
+                    }
+                });
+            });
+        }, { scrollMode: 'start' });
+    }
+
     function cleanupChatModelBadges() {
         if (!chatHistory) return;
         chatHistory.querySelectorAll('.bot-model-badge').forEach(badge => badge.remove());
@@ -5506,10 +6435,11 @@ Treat genre conventions as suggested, not confirmed, unless the user explicitly 
         msgDiv.className = 'chat-message user';
         if (options.timelineOnly) msgDiv.classList.add('timeline-source');
         const timeStr = new Date().toLocaleTimeString('en-US', { hour: 'numeric', minute: '2-digit', hour12: true }).toLowerCase();
-        const content = options.html ? text : escapeHtml(text);
+        const safeText = redactSensitiveText(text);
+        const content = options.html ? safeText : escapeHtml(safeText);
         const attachments = Array.isArray(options.attachments) ? options.attachments : [];
         const attachmentSummary = summarizeAttachmentsForAI(attachments);
-        recordChatTurn('user', text, { attachments: attachmentSummary });
+        recordChatTurn('user', safeText, { attachments: attachmentSummary });
         if (attachments.length) msgDiv.classList.add('has-attachments');
         const attachmentsHtml = attachments.length ? `
             <div class="message-attachments">
@@ -5684,7 +6614,7 @@ Treat genre conventions as suggested, not confirmed, unless the user explicitly 
     function updateModelUI() {
         const active = getActiveModelMeta();
         if (activeModelIcon) activeModelIcon.style.display = 'none';
-        if (activeModelName) activeModelName.textContent = getCompactModelLabel(active.label);
+        if (activeModelName) activeModelName.textContent = cleanModelDisplayLabel(active.label);
         if (modelSelector) {
             modelSelector.style.setProperty('--model-color', active.color);
             modelSelector.title = hasLiveAIProvider() ? `Current model: ${active.label}` : 'Platform AI is not configured. Configure a model before generating.';
@@ -5707,15 +6637,16 @@ Treat genre conventions as suggested, not confirmed, unless the user explicitly 
         if (!platformModelsLoaded) {
             modelDropdownList.innerHTML = '<div class="model-empty">Loading configured models...</div>';
         } else if (platformModels.length) {
-            const groups = platformModels.reduce((acc, modelConfig) => {
-                if (!acc[modelConfig.providerId]) acc[modelConfig.providerId] = [];
-                acc[modelConfig.providerId].push(modelConfig);
-                return acc;
-            }, {});
+            const orderedModels = [];
             PROVIDER_ORDER.forEach(providerId => {
-                if (!groups[providerId] || !groups[providerId].length) return;
-                renderModelGroup(providerId, groups[providerId]);
+                platformModels
+                    .filter(modelConfig => modelConfig.providerId === providerId)
+                    .forEach(modelConfig => orderedModels.push(modelConfig));
             });
+            platformModels
+                .filter(modelConfig => !PROVIDER_ORDER.includes(modelConfig.providerId))
+                .forEach(modelConfig => orderedModels.push(modelConfig));
+            orderedModels.forEach(renderModelOption);
         } else if (!platformAIAvailable) {
             modelDropdownList.innerHTML = '<div class="model-empty">Backend models unavailable. Check droi-config.json / DROI_API_BASE, then refresh.</div>';
         }
@@ -5729,35 +6660,23 @@ Treat genre conventions as suggested, not confirmed, unless the user explicitly 
         }
     }
 
-    function renderModelGroup(providerId, models) {
+    function renderModelOption(modelConfig) {
+        const providerId = modelConfig.providerId;
         const meta = PROVIDER_META[providerId] || PROVIDER_META.custom;
-        const group = document.createElement('div');
-        group.className = 'model-provider-group';
-        group.style.setProperty('--model-color', meta.color);
-        group.innerHTML = `
-            <div class="model-provider-heading">
-                <span class="model-provider-icon">${escapeHtml(meta.icon)}</span>
-                <span>${escapeHtml(meta.label)}</span>
-            </div>
+        const btn = document.createElement('button');
+        btn.type = 'button';
+        btn.className = 'model-option';
+        btn.style.setProperty('--model-color', meta.color);
+        const modelId = modelConfig.modelId;
+        const label = modelConfig.label || getModelLabel(providerId, modelId);
+        const active = aiConfig.activeProvider === providerId && getProviderModelId(providerId) === modelId;
+        btn.setAttribute('aria-selected', active ? 'true' : 'false');
+        btn.innerHTML = `
+            <span>${escapeHtml(label)}</span>
+            ${active ? '<small aria-hidden="true">✓</small>' : ''}
         `;
-
-        models.forEach(modelConfig => {
-            const btn = document.createElement('button');
-            btn.type = 'button';
-            btn.className = 'model-option';
-            btn.style.setProperty('--model-color', meta.color);
-            const modelId = modelConfig.modelId;
-            const label = modelConfig.label || getModelLabel(providerId, modelId);
-            const active = aiConfig.activeProvider === providerId && getProviderModelId(providerId) === modelId;
-            btn.innerHTML = `
-                <span>${escapeHtml(label)}</span>
-                ${active ? '<small>Active</small>' : ''}
-            `;
-            btn.addEventListener('click', () => switchActiveModel(providerId, modelId, modelConfig.reasoningEffort));
-            group.appendChild(btn);
-        });
-
-        modelDropdownList.appendChild(group);
+        btn.addEventListener('click', () => switchActiveModel(providerId, modelId, modelConfig.reasoningEffort));
+        modelDropdownList.appendChild(btn);
     }
 
     function switchActiveModel(providerId, modelId, reasoningEffort) {
@@ -5949,6 +6868,7 @@ Treat genre conventions as suggested, not confirmed, unless the user explicitly 
         const container = document.getElementById('chatOptionsContainer');
         const definition = getStepDefinition(step);
         const canSkip = definition && !CRITICAL_FOLLOWUP_KEYS.has(definition.key);
+        const canUseQuickInspiration = definition && definition.key === 'type' && !analysisState.active;
 
         // Re-trigger animation
         container.style.animation = 'none';
@@ -5969,6 +6889,7 @@ Treat genre conventions as suggested, not confirmed, unless the user explicitly 
                 <input type="text" data-decision-other-input placeholder="Other..." aria-label="Other custom answer" aria-keyshortcuts="4">
                 <button type="button" data-decision-other>Use Other</button>
                 ${canSkip ? '<button type="button" data-decision-skip>Skip</button>' : ''}
+                ${canUseQuickInspiration ? '<button type="button" data-decision-quick-inspiration>Quick inspiration</button>' : ''}
                 <button type="button" class="decision-more-options" data-decision-more aria-keyshortcuts="5">More options</button>
             </div>
         `;
@@ -6018,6 +6939,19 @@ Treat genre conventions as suggested, not confirmed, unless the user explicitly 
             skipBtn.addEventListener('click', () => {
                 const skipped = { label: 'Not specified', value: 'Not specified', desc: 'Skipped by user.' };
                 onChatOptionClick(step, skipped, skipBtn);
+            });
+        }
+        const quickInspirationBtn = card.querySelector('[data-decision-quick-inspiration]');
+        if (quickInspirationBtn) {
+            quickInspirationBtn.addEventListener('click', () => {
+                container.style.display = 'none';
+                chatOptionsList.innerHTML = '';
+                if (container.__decisionKeydown) {
+                    document.removeEventListener('keydown', container.__decisionKeydown, true);
+                    container.__decisionKeydown = null;
+                }
+                addUserMessage(profileText('quickInspiration'));
+                renderQuickInspirationTemplates(step);
             });
         }
         const moreBtn = card.querySelector('[data-decision-more]');
@@ -6333,7 +7267,7 @@ Lock Game Type to "Bullet Hell / Flying Shooter" and genre to "bullet-hell".`
             `<div class="summary-item"><strong>${escapeHtml(planLabel('storyPremise'))}:</strong> ${escapeHtml(normalized.story)}</div>`,
             `<div class="summary-item"><strong>${escapeHtml(planLabel('coreLoop'))}:</strong> ${escapeHtml(normalized.coreGameplay)}</div>`,
             `<div class="summary-item"><strong>${escapeHtml(bhText('goal'))}:</strong> ${escapeHtml(normalized.winCondition)}</div>`,
-            `<div class="summary-item"><strong>${escapeHtml(bhText('boss'))}:</strong> ${escapeHtml(normalized.bossConfig.name)} 路 ${escapeHtml(String(normalized.bossConfig.phases.length))} phases 路 HP ${escapeHtml(String(normalized.bossConfig.hp))}</div>`,
+            `<div class="summary-item"><strong>${escapeHtml(bhText('boss'))}:</strong> ${escapeHtml(normalized.bossConfig.name)} · ${escapeHtml(String(normalized.bossConfig.phases.length))} phases · HP ${escapeHtml(String(normalized.bossConfig.hp))}</div>`,
             `<div class="summary-item"><strong>${escapeHtml(bhText('waves'))}:</strong> ${escapeHtml(normalized.waves.map(wave => firstText(wave.name || wave.id)).join(' / '))}</div>`,
             `<div class="summary-item"><strong>${escapeHtml(bhText('progression'))}:</strong> ${escapeHtml(normalized.progression)}</div>`,
             `<div class="summary-item"><strong>${escapeHtml(bhText('difficulty'))}:</strong> ${escapeHtml(firstText(normalized.difficultyTuning.level, 'Normal'))}</div>`,
@@ -6460,6 +7394,80 @@ Lock Game Type to "Bullet Hell / Flying Shooter" and genre to "bullet-hell".`
         }
     }
 
+    function buildGameSpecSummaryRowsHtml(spec = getCurrentGameSpec()) {
+        const rows = getGameSpecDisplayRows(spec);
+        if (!rows.length) return '';
+        return [
+            '<div class="summary-title gamespec-summary-title">GameSpec modules</div>',
+            ...rows.map(row => {
+                const detail = row.detail && normalizeAnswerText(row.detail) !== normalizeAnswerText(row.label)
+                    ? ` <span class="summary-detail">${escapeHtml(row.detail)}</span>`
+                    : '';
+                return `<div class="summary-item gamespec-summary-row"><strong>${escapeHtml(row.title)}:</strong> ${escapeHtml(row.label)}${detail}</div>`;
+            }),
+            '<div class="summary-item"><strong>Generation Mode:</strong> AI direct HTML5 Canvas</div>'
+        ].join('');
+    }
+
+    function buildLocalGamePlanFallback(spec = getCurrentGameSpec()) {
+        const gameType = spec.gameType || 'HTML5 game';
+        const setting = spec.gameSetting || spec.background || 'a focused playable world';
+        const goal = spec.playerGoal || 'clear the objective';
+        const challenge = spec.mainChallenge || 'readable escalating pressure';
+        const progression = spec.progressionSystem || 'clear growth between attempts';
+        const difficulty = spec.difficultyLevel || 'Normal';
+        return normalizeGamePlanForGeneration({
+            title: `${gameType} in ${setting}`.slice(0, 120),
+            hook: `A ${difficulty.toLowerCase()} ${gameType} prototype where the player pursues ${goal} through a clear browser-safe loop.`,
+            storyPremise: spec.background || `The game takes place in ${setting}, with the player's goal and challenge visible from the first screen.`,
+            coreLoop: spec.coreGameplay || 'Move, act, react to feedback, earn progress, and restart cleanly.',
+            momentToMoment: spec.coreGameplay || 'The player makes short-cycle decisions with immediate visual and score feedback.',
+            visualDirection: spec.artStyle
+                ? `${spec.artStyle} with readable UI, clear contrast, and responsive canvas framing.`
+                : 'Readable 2D game art with clear contrast and responsive canvas framing.',
+            enemyDesign: challenge,
+            progressionPlan: progression,
+            playerFantasy: goal,
+            prototypeScope: 'Build one compact playable loop with start, play, fail, win or score, pause, restart, and responsive controls.',
+            risk: 'Keep scope compact so AI direct generation can produce a stable single-file HTML5 Canvas game.'
+        }, spec);
+    }
+
+    function buildLocalGameSpecConfirmationHtml(spec = getCurrentGameSpec()) {
+        return buildAISummaryHtml(buildLocalGamePlanFallback(spec), spec, { fallback: true });
+    }
+
+    function hasExplicitAdvancedRuntimePromptEvidence(prompt) {
+        return /\bskill tree|talent tree|perk tree|ability tree|bullet[-\s]?time|slow[-\s]?mo|slow motion|time slow|homing|split(ting)? projectiles?|dash\b|persistent upgrades?|local storage|boss phases?\b/i.test(String(prompt || '')) ||
+            /\u6280\u80fd\u6811|\u5b50\u5f39\u65f6\u95f4|\u6162\u52a8\u4f5c|\u8ffd\u8e2a\u5b50\u5f39|\u5206\u88c2\u5b50\u5f39/.test(String(prompt || ''));
+    }
+
+    function planContainsImplicitAdvancedRuntime(plan = {}) {
+        const text = [
+            plan.coreLoop,
+            plan.momentToMoment,
+            plan.enemyDesign,
+            plan.progressionPlan,
+            plan.prototypeScope,
+            plan.risk
+        ].filter(Boolean).join(' ');
+        return /\bskill tree|talent tree|perk tree|ability tree|bullet[-\s]?time|slow[-\s]?mo|slow motion|time slow|homing|split(ting)? projectiles?|dash\b|persistent upgrades?|local storage|boss phases?\b/i.test(text);
+    }
+
+    function constrainGamePlanToFirstPlayable(plan = {}, spec = getCurrentGameSpec(), prompt = '') {
+        if (!plan || hasExplicitAdvancedRuntimePromptEvidence(prompt) || !planContainsImplicitAdvancedRuntime(plan)) return plan;
+        return {
+            ...plan,
+            hook: plan.hook || `A compact ${spec.gameType || 'arcade'} loop focused on readable movement, challenge, and feedback.`,
+            coreLoop: 'Dodge enemy patterns, shoot or avoid threats, collect simple pickups, survive waves, and chase score before the timer ends.',
+            momentToMoment: 'Move with keyboard controls, avoid projectiles, line up attacks, collect pickups, read the HUD, and restart quickly after failure.',
+            enemyDesign: 'Use a small enemy set with straight, aimed, or ring projectile patterns; keep telegraphs readable and avoid new runtime-only behaviors.',
+            progressionPlan: 'Use score, timer pressure, wave pacing, and collectible pickups for first-playable growth; defer advanced upgrade systems.',
+            prototypeScope: 'One 2D canvas arena with movement, shooting or dodging, enemy waves, pickups, timer/score HUD, fail state, and restart.',
+            risk: 'Advanced runtime mechanics from the expanded concept were deferred so automatic template compile can produce an honest first playable.'
+        };
+    }
+
     async function askFinalConfirmation() {
         clearInspirePromptTimer();
         const spec = getCurrentGameSpec();
@@ -6471,40 +7479,8 @@ Lock Game Type to "Bullet Hell / Flying Shooter" and genre to "bullet-hell".`
             });
             return;
         }
-        const shapingStartedAt = Date.now();
-        const briefEventId = addExecutionEvent('Writing production brief', 'running', buildGameSpecPlainText(spec), { open: true });
         const pendingMessage = addBotMessage('', null, { pending: true, workType: 'shaping' });
-        let summaryHtml = '';
-        try {
-            summaryHtml = await buildGamePlanSummaryHtml();
-            updateExecutionEvent(briefEventId, {
-                status: 'done',
-                title: 'Created production brief - 10 gameplay requirements',
-                detail: latestGamePlanDraft || buildGamePlanDraftText(latestGamePlan, spec)
-            });
-        } catch (error) {
-            const flowError = classifyAIFlowError(error, 'Game plan summary');
-            recordDiagnostic('ai-plan-failed', {
-                phase: 'Game plan summary',
-                message: flowError.message || String(error),
-                technicalMessage: flowError.technicalMessage || ''
-            });
-            updateExecutionEvent(briefEventId, {
-                status: 'failed',
-                title: 'Production brief failed',
-                detail: flowError.technicalMessage || flowError.message || String(error)
-            });
-            if (pendingMessage) pendingMessage.remove();
-            showAIFlowError(flowError, {
-                phase: 'Game plan summary',
-                onRetry: askFinalConfirmation
-            });
-            return;
-        }
-        const remainingWorkTime = Math.max(0, 1200 - (Date.now() - shapingStartedAt));
-        if (remainingWorkTime) {
-            await new Promise(resolve => setTimeout(resolve, remainingWorkTime));
-        }
+        const summaryHtml = await buildGamePlanSummaryHtml();
         if (pendingMessage) pendingMessage.finish(summaryHtml);
         regTimeout(() => {
             addBotMessage(t('ready'), () => {
@@ -6521,7 +7497,7 @@ Lock Game Type to "Bullet Hell / Flying Shooter" and genre to "bullet-hell".`
             const response = await withTimeout(aiService.stageChat('/api/ai/generate-game-plan', [
                 {
                     role: 'system',
-                    content: `You are a senior game product designer generating a complete P0 GamePlan for an AI direct HTML5 Canvas game. Return only valid JSON with keys title, hook, storyPremise, coreLoop, momentToMoment, visualDirection, enemyDesign, progressionPlan, playerFantasy, prototypeScope, risk. Keep every value under 48 words, but make each value specific enough to drive direct code generation, readable controls, progression, visual feedback, and win/fail goals. Do not restrict the idea to a fixed frontend gameplay whitelist. ${getLanguageInstruction()}`
+                    content: `You are a senior game product designer generating a complete P0 GamePlan for an AI direct HTML5 Canvas game. Return only valid JSON with keys title, hook, storyPremise, coreLoop, momentToMoment, visualDirection, enemyDesign, progressionPlan, playerFantasy, prototypeScope, risk. Keep every value under 48 words, but make each value specific enough to drive direct code generation, readable controls, progression, visual feedback, and win/fail goals. Plan the first playable version only: do not add skill trees, slow-motion powers, homing/splitting projectiles, persistent upgrades, complex boss phases, online systems, 3D, or other new runtime mechanics unless the user explicitly asked for them. If the user gave a simple idea, keep progression to score, timer, waves, pickups, or tuning that can fit a compact browser-safe prototype. Do not restrict the idea to a fixed frontend gameplay whitelist. ${getLanguageInstruction()}`
                 },
                 {
                     role: 'user',
@@ -6533,16 +7509,81 @@ Lock Game Type to "Bullet Hell / Flying Shooter" and genre to "bullet-hell".`
                     })
                 }
             ], { provider: responseModelMeta.providerId, model: responseModelMeta.modelId }), AI_GAME_PLAN_TIMEOUT_MS, 'Game plan summary');
-            const plan = validateGamePlanResponse(extractModelJsonObject(response.content, 'Game plan summary'));
+            const plan = constrainGamePlanToFirstPlayable(
+                validateGamePlanResponse(extractModelJsonObject(response.content, 'Game plan summary')),
+                spec,
+                spec.background || savedPrompt || ''
+            );
         analysisState.finalModelMeta = {
             ...responseModelMeta,
             ...(response.modelMeta || {}),
             responseModel: response.model || response.modelMeta?.modelId || responseModelMeta.modelId
         };
-            return buildAISummaryHtml(plan);
+            return buildAISummaryHtml(plan, spec);
         } catch (error) {
-            throw classifyAIFlowError(error, 'Game plan summary');
+            const classified = classifyAIFlowError(error, 'Game plan summary');
+            recordDiagnostic('game-plan-summary-fallback', {
+                message: classified.message || String(error),
+                code: classified.code || '',
+                category: classified.category || ''
+            });
+            return buildLocalGameSpecConfirmationHtml(getCurrentGameSpec());
         }
+    }
+
+    async function analyzeStructuredGameSpecBeforeGeneration(spec = getCurrentGameSpec()) {
+        const activeModel = requireActiveAIModel('Game request analysis');
+        const response = await aiService.stageChat('/api/ai/analyze-game-request', [
+            {
+                role: 'system',
+                content: `You are validating a user-confirmed structured GameSpec before AI direct generation. Return strict JSON only with modules, background, missingFields, confidence, gamePlanningDecision, safetyDecision, and capability. Do not add new requirements. Do not reject browser-safe 2D HTML5 Canvas ideas because of game type. Set capability.supported=false only for safety, platform, external dependency, backend multiplayer, native app, VR, explicit 3D generation, or unsafe browser runtime requirements.`
+            },
+            {
+                role: 'user',
+                content: JSON.stringify({
+                    confirmedGameSpec: spec,
+                    requestContext: buildAIRequestContext(savedPrompt || buildGameSpecPlainText(spec)),
+                    instruction: 'Validate this confirmed GameSpec for AI direct HTML5 Canvas generation. Keep all eight fields as confirmed modules.'
+                })
+            }
+        ], {
+            provider: activeModel.providerId,
+            model: activeModel.modelId,
+            maxTokens: 1400,
+            phase: 'Game request analysis'
+        });
+
+        const parsed = validateAnalysisResponse(extractModelJsonObject(response.content, 'Game request analysis'));
+        analysisState.capability = parsed.capability || { supported: true, blockedReasons: [] };
+        analysisState.gamePlanningDecision = parsed.gamePlanningDecision || null;
+        analysisState.analysisModelMeta = {
+            ...activeModel,
+            ...(response.modelMeta || {}),
+            responseModel: response.model || response.modelMeta?.modelId || activeModel.modelId
+        };
+        analysisState.aiRecommendationSnapshot = createAIRecommendationSnapshot();
+
+        if (analysisState.capability && analysisState.capability.supported === false) {
+            const capabilityDecision = evaluateAIDirectCapability(spec);
+            if (capabilityDecision && capabilityDecision.canAutoGenerate === false) {
+                throw buildUnsupportedTemplateError(capabilityDecision);
+            }
+            analysisState.capability = {
+                ...analysisState.capability,
+                supported: true,
+                overriddenByUserConstraint: true
+            };
+        }
+
+        return parsed;
+    }
+
+    async function prepareModelStagesBeforeGeneration(spec = getCurrentGameSpec()) {
+        if (analysisState.flowMode === 'guided_game_spec' && !analysisState.analysisModelMeta) {
+            await withTimeout(analyzeStructuredGameSpecBeforeGeneration(spec), AI_ANALYSIS_TIMEOUT_MS, 'Game request analysis');
+        }
+        if (latestGamePlan) return latestGamePlan;
+        return buildGamePlanSummaryHtml();
     }
 
     function buildUnsupportedTemplateError(decision = {}) {
@@ -6559,7 +7600,7 @@ Lock Game Type to "Bullet Hell / Flying Shooter" and genre to "bullet-hell".`
                 'CAPABILITY_3D_UNSUPPORTED',
                 'capability_unsupported',
                 '3D generation is not available yet',
-                "Sorry, Droi AI can't generate 3D games yet. Please try another 2D game idea, or leave your email and we'll follow up.",
+                "Sorry, Droi AI can't generate 3D games yet QAQ. Please try another 2D game idea, or leave your email and we'll follow up.",
                 reason,
                 actions
             );
@@ -6664,6 +7705,58 @@ Lock Game Type to "Bullet Hell / Flying Shooter" and genre to "bullet-hell".`
         ].join('\n');
     }
 
+    function compactModelText(value, maxLength = 320) {
+        const text = String(value || '').replace(/\s+/g, ' ').trim();
+        if (!text || text.length <= maxLength) return text;
+        return `${text.slice(0, maxLength - 1).trim()}...`;
+    }
+
+    function compactGameSpecForGeneration(spec = getCurrentGameSpec()) {
+        return {
+            gameType: compactModelText(spec.gameType, 160),
+            artStyle: compactModelText(spec.artStyle, 160),
+            gameSetting: compactModelText(spec.gameSetting, 180),
+            background: compactModelText(spec.background, 420),
+            coreGameplay: compactModelText(spec.coreGameplay, 220),
+            playerGoal: compactModelText(spec.playerGoal, 180),
+            mainChallenge: compactModelText(spec.mainChallenge, 220),
+            progressionSystem: compactModelText(spec.progressionSystem, 220),
+            difficultyLevel: compactModelText(spec.difficultyLevel || 'Normal', 80),
+            outputPackage: {
+                mode: 'fixed',
+                preview: true,
+                exportProjectFolder: true
+            }
+        };
+    }
+
+    function compactProductionPlanForGeneration(plan = latestGamePlan, spec = getCurrentGameSpec()) {
+        const normalized = normalizeGamePlanForGeneration(plan, spec);
+        return {
+            title: compactModelText(normalized.title, 120),
+            hook: compactModelText(normalized.hook, 220),
+            coreLoop: compactModelText(normalized.coreLoop, 260),
+            momentToMoment: compactModelText(normalized.momentToMoment, 260),
+            visualDirection: compactModelText(normalized.visualDirection, 260),
+            enemyDesign: compactModelText(normalized.enemyDesign, 260),
+            progressionPlan: compactModelText(normalized.progressionPlan, 240),
+            prototypeScope: compactModelText(normalized.prototypeScope, 260)
+        };
+    }
+
+    function buildCompactProductionBriefText(plan = latestGamePlan, spec = getCurrentGameSpec()) {
+        const compact = compactProductionPlanForGeneration(plan, spec);
+        return [
+            `Title: ${compact.title}`,
+            `Playable loop: ${compact.coreLoop}`,
+            `Moment-to-moment: ${compact.momentToMoment}`,
+            `Visual direction: ${compact.visualDirection}`,
+            `Challenge design: ${compact.enemyDesign}`,
+            `Progression: ${compact.progressionPlan}`,
+            `Scope: ${compact.prototypeScope}`
+        ].join('\n');
+    }
+
     function applyProductionPlanToSpec(spec = getCurrentGameSpec(), plan = latestGamePlan) {
         if (!plan) return spec;
         const normalized = normalizeGamePlanForGeneration(plan, spec);
@@ -6714,13 +7807,50 @@ Lock Game Type to "Bullet Hell / Flying Shooter" and genre to "bullet-hell".`
     }
 
     function termMentionIsNegated(intent, index, termLength) {
-        const before = intent.slice(Math.max(0, index - 48), index);
+        const before = intent.slice(Math.max(0, index - 96), index);
         const after = intent.slice(index + termLength, Math.min(intent.length, index + termLength + 32));
         const beforeNegation = /\b(no|not|without|exclude|excluding|avoid|avoiding|disable|disabled|non|never|don't|do not|dont|isn't|is not)\s*(?:any\s+|a\s+|an\s+|the\s+)?$/i.test(before)
+            || /\b(no|not|without|exclude|excluding|avoid|avoiding|reject|rejecting|rejected|disable|disabled|non|never|don't|do not|dont|isn't|is not)\b[^.!?\n]{0,80}$/i.test(before)
             || /(不是|不要|不需要|无需|别|禁止)\s*$/.test(before);
         const afterNegation = /^\s*(?:is\s+)?not\s+(?:required|needed|wanted|allowed)\b/i.test(after)
             || /^\s*(?:不需要|不要|无需|禁止|不是)/.test(after);
         return beforeNegation || afterNegation;
+    }
+
+    function explicit3DExclusionPatterns() {
+        return [
+            /\b(?:no|not|without|exclude|excluding|avoid|avoiding|reject|rejecting|rejected|disable|disabled|never|don't|do not|dont|non)\b[^.!?\n]{0,120}\b(?:3d|three\.js|webgl)\b/gi,
+            /\b(?:3d|three\.js|webgl)\b[^.!?\n]{0,80}\b(?:not\s+(?:required|needed|wanted|allowed|used)|excluded|disabled|forbidden)\b/gi,
+            /(?:不要|不需要|无需|避免|禁用|不要用|不要任何)[^。！？\n]{0,80}(?:3d|three\.js|webgl)/gi,
+            /(?:3d|three\.js|webgl)[^。！？\n]{0,80}(?:不需要|不要|无需|禁用|禁止)/gi
+        ];
+    }
+
+    function collectExplicit3DExclusions(intent) {
+        const text = String(intent || '');
+        return explicit3DExclusionPatterns().flatMap(pattern => text.match(pattern) || []);
+    }
+
+    function requestExplicitlyExcludes3D(intent) {
+        const text = String(intent || '');
+        if (!text.trim()) return false;
+        const explicitExclusions = collectExplicit3DExclusions(text);
+        if (explicitExclusions.length && /\b(?:2d|canvas|html5|browser-safe|browser safe|vanilla\s+js)\b/i.test(text)) {
+            return true;
+        }
+        const capability = detectCapabilityExceeded(text);
+        return Boolean(
+            capability.intentType === 'excluded_3d' ||
+            (capability.excludedCapabilities && capability.excludedCapabilities.includes('3d')) ||
+            (explicitExclusions.length && capability.blocked !== true)
+        );
+    }
+
+    function stripExplicit3DExclusions(intent) {
+        return explicit3DExclusionPatterns().reduce(
+            (next, pattern) => next.replace(pattern, ' 2d browser-safe constraint '),
+            String(intent || '')
+        );
     }
 
     function findCapabilityTermState(intent, term) {
@@ -6747,8 +7877,19 @@ Lock Game Type to "Bullet Hell / Flying Shooter" and genre to "bullet-hell".`
         return /\b3d\b|three\.js|3d generation|3d game|3d world|3d model|3d camera/i.test(String(reason || ''));
     }
 
+    function isExcludedBrowserSafeConstraintReason(reason = '') {
+        const text = String(reason || '').toLowerCase();
+        if (!text) return false;
+        if (detectCapabilityExceeded(text).intentType === 'excluded_3d') return true;
+        const mentionsExcludedRuntime = /\b(3d|three\.js|webgl|external\s+(?:game\s+)?engine|external\s+dependenc|library|framework)\b/i.test(text);
+        const hasExclusionLanguage = /\b(no|not|without|avoid|exclude|excluding|disable|disabled|never|vanilla|browser-safe|html5|canvas-only|pure canvas)\b/i.test(text);
+        return mentionsExcludedRuntime && hasExclusionLanguage;
+    }
+
     function detectCapabilityExceeded(text) {
-        const intent = String(text || '').toLowerCase();
+        const rawIntent = String(text || '').toLowerCase();
+        const explicit3DExclusions = collectExplicit3DExclusions(rawIntent);
+        const intent = stripExplicit3DExclusions(rawIntent).toLowerCase();
         const threeDTerms = ['3d', 'three.js'];
         const threeDStates = threeDTerms.map(term => ({
             term,
@@ -6763,7 +7904,7 @@ Lock Game Type to "Bullet Hell / Flying Shooter" and genre to "bullet-hell".`
                 reason: `Capability exceeded: ${requested3D.term}`
             };
         }
-        const excludedCapabilities = threeDStates.some(state => state.excluded) ? ['3d'] : [];
+        const excludedCapabilities = (threeDStates.some(state => state.excluded) || explicit3DExclusions.length) ? ['3d'] : [];
         const blockers = [
             'multiplayer', 'online co-op', 'mmo', 'massive open world',
             'virtual reality', 'augmented reality', 'blockchain', 'nft', 'voice chat',
@@ -6784,16 +7925,70 @@ Lock Game Type to "Bullet Hell / Flying Shooter" and genre to "bullet-hell".`
             reason: ''
         };
     }
+
+    function collectCapabilityRequestText(spec = getCurrentGameSpec()) {
+        const intentSummary = analysisState.intentSummary || {};
+        const pieces = [
+            getSpecIntentText(spec),
+            savedPrompt || '',
+            analysisState.originalPrompt || '',
+            analysisState.background || '',
+            intentSummary.rawPrompt,
+            intentSummary.normalizedPrompt,
+            intentSummary.primaryTask,
+            intentSummary.backgroundSummary,
+            Array.isArray(intentSummary.constraints) ? intentSummary.constraints.join('\n') : '',
+            Array.isArray(intentSummary.acceptanceCriteria) ? intentSummary.acceptanceCriteria.join('\n') : '',
+            mainInput && mainInput.value,
+            chatInputField && chatInputField.value
+        ];
+        return pieces.filter(Boolean).join('\n');
+    }
+
+    function collectUserCapabilityRequestText() {
+        const intentSummary = analysisState.intentSummary || {};
+        return [
+            savedPrompt || '',
+            analysisState.originalPrompt || '',
+            intentSummary.rawPrompt,
+            intentSummary.normalizedPrompt,
+            intentSummary.primaryTask,
+            intentSummary.backgroundSummary,
+            Array.isArray(intentSummary.constraints) ? intentSummary.constraints.join('\n') : '',
+            Array.isArray(intentSummary.acceptanceCriteria) ? intentSummary.acceptanceCriteria.join('\n') : '',
+            mainInput && mainInput.value,
+            chatInputField && chatInputField.value
+        ].filter(Boolean).join('\n');
+    }
+
     function evaluateAIDirectCapability(spec = getCurrentGameSpec()) {
         const intent = getSpecIntentText(spec);
-        const capability = detectCapabilityExceeded(intent);
+        const requestIntent = collectCapabilityRequestText(spec);
+        const requestCapability = detectCapabilityExceeded(requestIntent);
+        const userRequestIntent = collectUserCapabilityRequestText();
+        const userRequestCapability = detectCapabilityExceeded(userRequestIntent);
+        const explicitUser3DExclusion = requestExplicitlyExcludes3D(userRequestIntent)
+            || requestExplicitlyExcludes3D(requestIntent);
+        const capability = explicitUser3DExclusion
+            ? {
+                blocked: false,
+                capabilityCode: 'excluded_3d',
+                intentType: 'excluded_3d',
+                excludedCapabilities: ['3d'],
+                reason: ''
+            }
+            : detectCapabilityExceeded(intent);
+        const excluded3DByRequest = Boolean(
+            (capability.excludedCapabilities && capability.excludedCapabilities.includes('3d')) ||
+            (requestCapability.excludedCapabilities && requestCapability.excludedCapabilities.includes('3d'))
+        );
         const aiBlockedReasons = analysisState.capability && Array.isArray(analysisState.capability.blockedReasons)
             ? analysisState.capability.blockedReasons.filter(Boolean)
             : [];
-        const aiOnlyBlockedByExcluded3D = capability.excludedCapabilities && capability.excludedCapabilities.includes('3d')
+        const aiOnlyBlockedByExcluded3D = excluded3DByRequest
             && aiBlockedReasons.length > 0
-            && aiBlockedReasons.every(reason => is3DCapabilityReason(reason));
-        const aiCapability = analysisState.capability && analysisState.capability.supported === false && !aiOnlyBlockedByExcluded3D
+            && aiBlockedReasons.every(reason => is3DCapabilityReason(reason) || isExcludedBrowserSafeConstraintReason(reason));
+        const aiCapability = analysisState.capability && analysisState.capability.supported === false && !explicitUser3DExclusion && !aiOnlyBlockedByExcluded3D
             ? {
                 blocked: true,
                 capabilityCode: aiBlockedReasons.some(reason => is3DCapabilityReason(reason)) ? 'requested_3d' : 'ai_capability_unsupported',
@@ -6813,20 +8008,23 @@ Lock Game Type to "Bullet Hell / Flying Shooter" and genre to "bullet-hell".`
                 confidence: 1,
                 reason: effectiveCapability.reason,
                 fallbackMessage: is3DUnsupported
-                    ? "Sorry, Droi AI can't generate 3D games yet. Please try another 2D game idea, or leave your email and we'll follow up."
+                    ? "Sorry, Droi AI can't generate 3D games yet QAQ. Please try another 2D game idea, or leave your email and we'll follow up."
                     : 'This is not a game-type limitation. The current request hit a safety, platform, or browser runtime risk, so please leave an email for manual review.',
                 candidates: []
             };
         }
+        const aiDecision = normalizeAIGenerationDecision(analysisState.generationDecision, spec);
+        if (aiDecision) return aiDecision;
         return {
             canAutoGenerate: true,
             templateId: 'ai_direct',
             templateLabel: 'AI direct',
             templateGenre: spec.gameType || 'custom-html5-game',
+            generationMode: 'ai_direct',
             normalizedGameType: spec.gameType || 'Custom HTML5 game',
             locked: false,
             confidence: 1,
-            reason: 'All browser-safe game types enter AI direct generation.',
+            reason: 'No AI-selected compile-ready backend template; browser-safe request enters AI direct generation.',
             fallbackMessage: '',
             candidates: []
         };
@@ -7221,7 +8419,7 @@ Lock Game Type to "Bullet Hell / Flying Shooter" and genre to "bullet-hell".`
             productionPlan: normalizedProductionPlan,
             productionBrief: normalizedProductionPlan ? buildProductionBriefText(normalizedProductionPlan, sourceSpec) : '',
             generatedSpec: decision.canAutoGenerate ? buildGeneratedGameSpec(sourceSpec, decision) : null,
-            generationMode: 'ai_direct'
+            generationMode: decision.generationMode || 'ai_direct'
         };
     }
 
@@ -7389,7 +8587,7 @@ Lock Game Type to "Bullet Hell / Flying Shooter" and genre to "bullet-hell".`
         const codeFiles = normalizeModelGeneratedFiles(files).some(file => String(file.path || '').toLowerCase() === 'index.html')
             ? normalizeModelGeneratedFiles(files)
             : [{ path: 'index.html', content: html }];
-        return normalizeAIDirectProjectResponse({
+        return normalizeGeneratedProject({
             projectId,
             previewUrl,
             codeFiles: [
@@ -7456,10 +8654,98 @@ Lock Game Type to "Bullet Hell / Flying Shooter" and genre to "bullet-hell".`
         );
         if (!htmlFile) return '';
         const html = decodeEscapedGeneratedContent(htmlFile.content);
-        return validateAIDirectHtml(html).ok ? html : '';
+        if (validateAIDirectHtml(html).ok) return html;
+        const backendValidated = project && project.validationReport && project.validationReport.ok === true;
+        const hasRunnableSurface = /<canvas\b/i.test(html) && /<script\b/i.test(html);
+        return backendValidated && hasRunnableSurface ? html : '';
     }
 
-    function normalizeAIDirectProjectResponse(data, plan, spec, activeModel) {
+    function hasGeneratedFilePath(codeFiles, predicate) {
+        return (Array.isArray(codeFiles) ? codeFiles : []).some(file => predicate(String(file.path || '').replace(/\\/g, '/').toLowerCase()));
+    }
+
+    function deriveNormalizedProjectContract(project, codeFiles, mode, activeModel) {
+        const report = project.generationReport || project.report || {};
+        const reportCapabilities = report && typeof report === 'object' ? report.capabilities : null;
+        const hasManifest = hasGeneratedFilePath(codeFiles, path => path === 'assets/manifest.json' || path.endsWith('/assets/manifest.json'));
+        const hasSpec = hasGeneratedFilePath(codeFiles, path => path === 'spec/game.json' || path.endsWith('/spec/game.json'));
+        const hasAssetDomains = ['assets/audio & feel/', 'assets/game art/', 'assets/ui art/', 'assets/visual style/']
+            .some(prefix => hasGeneratedFilePath(codeFiles, path => path.startsWith(prefix)));
+        const hasRuntimeCore = hasGeneratedFilePath(codeFiles, path => path.startsWith('runtime/core/'));
+        const runtimeModules = (Array.isArray(codeFiles) ? codeFiles : [])
+            .map(file => String(file.path || '').replace(/\\/g, '/'))
+            .filter(path => path.toLowerCase().startsWith('runtime/modules/'));
+        const runtimeArchitecture = project.runtimeArchitecture || report.runtimeArchitecture || (hasRuntimeCore && runtimeModules.length ? {
+            coreLocked: true,
+            moduleRoot: 'runtime/modules',
+            editableModules: runtimeModules,
+            forbiddenPaths: ['game.js', 'runtime/core/*']
+        } : null);
+        const derivedCapabilities = {
+            supportsL1: true,
+            supportsL2: Boolean(hasManifest && hasSpec && hasAssetDomains),
+            supportsL3: Boolean(hasManifest && hasSpec && hasAssetDomains),
+            supportsL4: Boolean(runtimeArchitecture),
+            reason: hasManifest && hasSpec
+                ? 'Capabilities derived from generated project structure.'
+                : 'AI direct single-file project supports L1 edits; region edits require manifest/spec domains.'
+        };
+        const sourceTrace = project.sourceTrace || report.sourceTrace || {
+            generator: mode,
+            templateUsed: false,
+            templateId: null,
+            model: activeModel ? {
+                providerId: activeModel.providerId,
+                modelId: activeModel.modelId,
+                label: activeModel.label || getModelLabel(activeModel.providerId, activeModel.modelId)
+            } : null
+        };
+        return {
+            capabilities: {
+                ...derivedCapabilities,
+                ...(reportCapabilities && typeof reportCapabilities === 'object' ? reportCapabilities : {}),
+                ...(project.capabilities && typeof project.capabilities === 'object' ? project.capabilities : {})
+            },
+            editableRegions: Array.isArray(project.editableRegions)
+                ? project.editableRegions
+                : (hasManifest && hasSpec ? ['visual/global', 'config/combat'] : []),
+            runtimeArchitecture,
+            sourceTrace
+        };
+    }
+
+    function normalizeProjectMeta(project = {}, generated = {}, previewUrl = '') {
+        const sourceMeta = project.projectMeta && typeof project.projectMeta === 'object' ? project.projectMeta : {};
+        const generatedMeta = generated && generated.meta && typeof generated.meta === 'object' ? generated.meta : {};
+        const userSpec = generated && generated.userSpec && typeof generated.userSpec === 'object' ? generated.userSpec : {};
+        const title = String(sourceMeta.title || sourceMeta.projectName || project.title || project.name || generatedMeta.gameName || userSpec.gameType || 'Generated Game').trim();
+        const description = String(
+            sourceMeta.description ||
+            sourceMeta.englishDescription ||
+            project.description ||
+            generatedMeta.description ||
+            userSpec.background ||
+            'A playable browser game generated by Droi AI.'
+        ).trim();
+        const coverImage = sourceMeta.coverImage && typeof sourceMeta.coverImage === 'object'
+            ? sourceMeta.coverImage
+            : {
+                url: sourceMeta.coverImage || project.coverImage || project.previewImage || '',
+                fallbackPreviewUrl: previewUrl || '',
+                status: sourceMeta.coverImage || project.coverImage || project.previewImage ? 'provided' : (previewUrl ? 'preview_screenshot_pending' : 'pending')
+            };
+        return {
+            ...sourceMeta,
+            title,
+            projectName: title,
+            description,
+            englishDescription: description,
+            coverImage,
+            updatedAt: sourceMeta.updatedAt || new Date().toISOString()
+        };
+    }
+
+    function normalizeGeneratedProject(data, plan, spec, activeModel, mode = 'ai_direct') {
         const project = data && data.project && typeof data.project === 'object' ? data.project : data;
         const codeFiles = (Array.isArray(project.codeFiles)
             ? project.codeFiles
@@ -7477,6 +8763,10 @@ Lock Game Type to "Bullet Hell / Flying Shooter" and genre to "bullet-hell".`
             modelId: activeModel.modelId,
             label: activeModel.label || getModelLabel(activeModel.providerId, activeModel.modelId)
         };
+        const contract = deriveNormalizedProjectContract({
+            ...project,
+            generationReport: report
+        }, codeFiles, mode, modelMeta || activeModel);
         if (!previewUrl) {
             throw createAIFlowError(
                 'AI_DIRECT_PREVIEW_MISSING',
@@ -7518,7 +8808,12 @@ Lock Game Type to "Bullet Hell / Flying Shooter" and genre to "bullet-hell".`
             generationReport: report,
             validationReport,
             modelMeta,
-            generationMode: 'ai_direct'
+            generationMode: project.generationMode || data.generationMode || mode,
+            projectMeta: normalizeProjectMeta(project, plan && plan.generatedSpec ? plan.generatedSpec : spec, previewUrl),
+            capabilities: contract.capabilities,
+            editableRegions: contract.editableRegions,
+            runtimeArchitecture: contract.runtimeArchitecture,
+            sourceTrace: contract.sourceTrace
         };
         if (report && !codeFiles.some(file => file.path === 'generation-report.json')) {
             normalizedProject.codeFiles = [
@@ -7531,12 +8826,26 @@ Lock Game Type to "Bullet Hell / Flying Shooter" and genre to "bullet-hell".`
                 }
             ];
         }
+        if (!normalizedProject.codeFiles.some(file => file.path === 'project-meta.json')) {
+            normalizedProject.codeFiles = [
+                ...normalizedProject.codeFiles,
+                {
+                    path: 'project-meta.json',
+                    content: JSON.stringify(normalizedProject.projectMeta, null, 2),
+                    language: 'json',
+                    kind: 'projectMeta'
+                }
+            ];
+        }
         return normalizedProject;
     }
 
     async function generateAIDirectGameProject(spec, productionPlan = null, productionBrief = '') {
         const activeModel = requireActiveAIModel('AI direct game generation');
         const prompt = savedPrompt || spec.background || '';
+        const requestSpec = compactGameSpecForGeneration(spec);
+        const requestPlan = compactProductionPlanForGeneration(productionPlan, requestSpec);
+        const requestBrief = buildCompactProductionBriefText(requestPlan, requestSpec);
         const callEventId = addExecutionEvent(
             `Calling ${activeModel.label || getModelLabel(activeModel.providerId, activeModel.modelId)}`,
             'running',
@@ -7549,9 +8858,9 @@ Lock Game Type to "Bullet Hell / Flying Shooter" and genre to "bullet-hell".`
             body: JSON.stringify({
                 prompt,
                 originalPrompt: prompt,
-                gameSpec: spec,
-                productionPlan,
-                productionBrief,
+                gameSpec: requestSpec,
+                productionPlan: requestPlan,
+                productionBrief: requestBrief || productionBrief,
                 provider: activeModel.providerId,
                 model: activeModel.modelId,
                 modelMeta: activeModel,
@@ -7606,7 +8915,7 @@ Lock Game Type to "Bullet Hell / Flying Shooter" and genre to "bullet-hell".`
             });
             throw classifyAIFlowError(error, 'AI direct game generation');
         }
-        const project = normalizeAIDirectProjectResponse(data, latestGenerationPlan, spec, activeModel);
+        const project = normalizeGeneratedProject(data, latestGenerationPlan, spec, activeModel, 'ai_direct');
         const modelDetail = project.modelMeta && project.modelMeta.fallbackUsed
             ? `\nModel fallback: requested ${project.modelMeta.requestedProviderId || activeModel.providerId}/${project.modelMeta.requestedModelId || activeModel.modelId}, used ${project.modelMeta.providerId}/${project.modelMeta.modelId}`
             : '';
@@ -7616,6 +8925,230 @@ Lock Game Type to "Bullet Hell / Flying Shooter" and genre to "bullet-hell".`
             detail: `Preview: ${project.previewUrl || ''}${modelDetail}\nFiles: ${(project.codeFiles || []).map(file => `${file.path}${file.content ? ` +${String(file.content).split('\n').length}` : ''}`).join('\n')}`
         });
         return project;
+    }
+
+    async function generateTemplatePatchPlan(plan, spec = getCurrentGameSpec(), templateId = '') {
+        const activeModel = requireActiveAIModel('TemplatePatchPlan generation');
+        const template = getTemplateStatus(templateId) || getTemplateCatalogEntry(templateId);
+        const artSkillDecision = resolveCompileArtSkillDecision(templateId);
+        const callEventId = addExecutionEvent(
+            `Planning template patch with ${activeModel.label || getModelLabel(activeModel.providerId, activeModel.modelId)}`,
+            'running',
+            '/api/ai/generate-template-patch'
+        );
+        const response = await fetch(apiUrl('/api/ai/generate-template-patch'), {
+            method: 'POST',
+            credentials: 'include',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({
+                prompt: savedPrompt || spec.background || '',
+                originalPrompt: savedPrompt || spec.background || '',
+                templateId,
+                template,
+                availableTemplates: getAvailableGameTemplatesForAI().filter(item => item && item.published !== false && item.compileReady === true),
+                gameSpec: spec,
+                productionPlan: plan ? plan.productionPlan : null,
+                productionBrief: plan ? plan.productionBrief : '',
+                artSkillDecision,
+                provider: activeModel.providerId,
+                model: activeModel.modelId,
+                modelMeta: activeModel,
+                maxTokens: 4096
+            })
+        });
+        let data;
+        try {
+            data = await parseJsonResponse(response);
+        } catch (error) {
+            updateExecutionEvent(callEventId, {
+                status: 'failed',
+                title: 'Template patch planning failed',
+                detail: error.message || String(error)
+            });
+            throw classifyAIFlowError(error, 'TemplatePatchPlan generation');
+        }
+        let patchPlan = data.patchPlan || null;
+        if (!patchPlan && data.content) {
+            try {
+                patchPlan = JSON.parse(data.content);
+            } catch (error) {
+                patchPlan = null;
+            }
+        }
+        if (!patchPlan || typeof patchPlan !== 'object') {
+            updateExecutionEvent(callEventId, {
+                status: 'failed',
+                title: 'Template patch planning failed',
+                detail: 'Missing patchPlan object'
+            });
+            throw createAIFlowError(
+                'TEMPLATE_PATCH_INVALID',
+                'schema_failure',
+                'Template patch plan is invalid',
+                'The selected model did not return a usable TemplatePatchPlan.',
+                'Missing patchPlan object',
+                ['retry', 'switch_model', 'manual_queue']
+            );
+        }
+        updateExecutionEvent(callEventId, {
+            status: 'done',
+            title: `Template patch ready - ${patchPlan.gameName || templateId}`,
+            detail: JSON.stringify({
+                templateId: patchPlan.templateId,
+                requiresRuntimeCodePatch: patchPlan.requiresRuntimeCodePatch === true,
+                checklist: Array.isArray(patchPlan.playabilityChecklist) ? patchPlan.playabilityChecklist.slice(0, 5) : []
+            }, null, 2)
+        });
+        return {
+            patchPlan,
+            modelMeta: data.modelMeta || {
+                providerId: activeModel.providerId,
+                modelId: activeModel.modelId,
+                label: activeModel.label || getModelLabel(activeModel.providerId, activeModel.modelId)
+            },
+            artSkillDecision
+        };
+    }
+
+    async function compileTemplateProject(plan, spec = getCurrentGameSpec(), patchResult = null) {
+        const activeModel = patchResult && patchResult.modelMeta ? patchResult.modelMeta : getActiveModelMeta();
+        const templateId = plan && plan.decision ? plan.decision.templateId : '';
+        const artSkillDecision = patchResult && patchResult.artSkillDecision
+            ? patchResult.artSkillDecision
+            : resolveCompileArtSkillDecision(templateId);
+        const callEventId = addExecutionEvent(
+            `Compiling ${getTemplateDisplayLabel(templateId, 'backend template')}`,
+            'running',
+            '/api/template-project/compile'
+        );
+        const response = await fetch(apiUrl('/api/template-project/compile'), {
+            method: 'POST',
+            credentials: 'include',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({
+                prompt: savedPrompt || spec.background || '',
+                originalPrompt: savedPrompt || spec.background || '',
+                templateId,
+                gameSpec: spec,
+                productionPlan: plan ? plan.productionPlan : null,
+                productionBrief: plan ? plan.productionBrief : '',
+                artSkillDecision,
+                patchPlan: patchResult ? patchResult.patchPlan : null,
+                modelMeta: activeModel || null,
+                constraints: {
+                    runtime: 'HTML5 Canvas',
+                    playable: true,
+                    responsive: true,
+                    externalDependencies: false,
+                    generationMode: 'template_assisted'
+                }
+            })
+        });
+        let data;
+        try {
+            data = await parseJsonResponse(response);
+        } catch (error) {
+            updateExecutionEvent(callEventId, {
+                status: 'failed',
+                title: 'Template compile failed',
+                detail: error.message || String(error)
+            });
+            throw classifyAIFlowError(error, 'Template-assisted compile');
+        }
+        const project = normalizeGeneratedProject(data, plan, spec, activeModel || {}, 'template_assisted');
+        updateExecutionEvent(callEventId, {
+            status: 'done',
+            title: `Compiled template - ${(project.codeFiles || []).map(file => file.path).slice(0, 3).join(', ') || 'project files'}`,
+            detail: `Preview: ${project.previewUrl || ''}\nFiles: ${(project.codeFiles || []).map(file => file.path).join('\n')}`
+        });
+        return project;
+    }
+
+    async function TemplateAssistedGenerator(plan, spec = getCurrentGameSpec(), progress = null) {
+        if (!plan || !plan.decision || !plan.decision.canAutoGenerate) return plan;
+        if (plan.generatedProject) return plan;
+        const templateId = plan.decision.templateId || '';
+        if (!templateId || templateId === 'ai_direct' || !isCompileReadyRuntimeTemplate(templateId)) {
+            plan.generationMode = 'ai_direct';
+            return ensureAIDirectProject(plan, spec, progress);
+        }
+        try {
+            const sourceSpec = applyProductionPlanToSpec(spec, plan.productionPlan || latestGamePlan);
+            if (progress) progress.setStage('generate', 15, 35, 30000, 'Planning template patch with the selected AI model...');
+            const patchResult = await withTimeout(
+                generateTemplatePatchPlan(plan, sourceSpec, templateId),
+                70000,
+                'TemplatePatchPlan generation'
+            );
+            if (patchResult.patchPlan && patchResult.patchPlan.requiresRuntimeCodePatch === true) {
+                throw createAIFlowError(
+                    'TEMPLATE_RUNTIME_PATCH_REQUIRED',
+                    'template_capability_unavailable',
+                    'Template needs a runtime patch',
+                    'The selected model determined this request needs runtime code changes, so automatic template compile was stopped.',
+                    patchResult.patchPlan.runtimePatchReason || '',
+                    ['retry', 'manual_queue']
+                );
+            }
+            if (progress) progress.setStage('generate', 35, 70, 30000, 'Compiling backend template into a playable HTML5 game...');
+            const project = await withTimeout(
+                compileTemplateProject(plan, sourceSpec, patchResult),
+                45000,
+                'Template-assisted compile'
+            );
+            if (progress) progress.completeStage('generate');
+            if (progress) progress.setStage('validate', 70, 90, 5000, 'Validating compiled template project...');
+            addExecutionEvent('Validating compiled project', project.validationReport && project.validationReport.ok === false ? 'warning' : 'done', project.validationReport ? JSON.stringify(project.validationReport, null, 2).slice(0, 1200) : 'Backend template validation accepted.');
+            plan.generatedProject = project;
+            plan.generationMode = 'template_assisted';
+            plan.templateAssistedGeneration = {
+                templateId,
+                validationReport: project.validationReport || null,
+                generationReport: project.generationReport || null,
+                sourceTrace: project.sourceTrace || null,
+                templatePatchPlan: patchResult.patchPlan || null,
+                patchModelMeta: patchResult.modelMeta || null,
+                productionPlan: plan.productionPlan || latestGamePlan || null,
+                productionBrief: plan.productionBrief || ''
+            };
+            if (patchResult.modelMeta) analysisState.finalModelMeta = patchResult.modelMeta;
+            await persistWorkspacePlanSnapshot(plan, 'generation_project_ready');
+            if (progress) progress.completeStage('validate');
+            if (progress) progress.setStage('preview', 90, 98, 2500, 'Preparing playable preview...');
+            addExecutionEvent('Preview ready', 'done', project.previewUrl || '');
+            if (progress) progress.completeStage('preview');
+            return plan;
+        } catch (error) {
+            const recoverWithAIDirect = error && (
+                error.code === 'TEMPLATE_RUNTIME_PATCH_REQUIRED' ||
+                error.code === 'TEMPLATE_COMPILE_VALIDATION_FAILED' ||
+                error.code === 'TEMPLATE_NOT_COMPILE_READY'
+            );
+            addExecutionEvent(
+                recoverWithAIDirect ? 'Template generation unavailable - using AI Direct' : 'Template generation failed',
+                recoverWithAIDirect ? 'warning' : 'failed',
+                error && (error.message || String(error)),
+                { open: !recoverWithAIDirect }
+            );
+            recordDiagnostic('template-assisted-generation-failed', {
+                phase: 'Template-assisted compile',
+                templateId,
+                message: error && (error.message || String(error)),
+                recoveredWithAIDirect: recoverWithAIDirect
+            });
+            if (recoverWithAIDirect) {
+                plan.generationMode = 'ai_direct';
+                plan.decision = {
+                    ...(plan.decision || {}),
+                    templateId: 'ai_direct',
+                    templateLabel: 'AI direct',
+                    generationMode: 'ai_direct',
+                    reason: 'Template-assisted generation was unavailable; continuing with AI Direct generation.'
+                };
+                return ensureAIDirectProject(plan, spec, progress);
+            }
+            throw classifyAIFlowError(error, 'Template-assisted compile');
+        }
     }
 
     async function editAIDirectGameProject(plan, prompt, target = null) {
@@ -7649,12 +9182,49 @@ Lock Game Type to "Bullet Hell / Flying Shooter" and genre to "bullet-hell".`
                     responsive: true,
                     externalDependencies: false,
                     preserveGameplay: true,
-                    generationMode: 'ai_direct_edit'
+                    generationMode: 'ai_direct_edit',
+                    editRegion: target && target.region ? target.region : '',
+                    editLevelHint: target && target.levelHint ? target.levelHint : ''
                 }
             })
         });
         const data = await parseJsonResponse(response);
-        return normalizeAIDirectProjectResponse(data, plan, sourceSpec, activeModel);
+        return normalizeGeneratedProject(data, plan, sourceSpec, activeModel, 'ai_direct_edit');
+    }
+
+    function reloadSrcdocPreviewFrame(frame) {
+        if (!frame || !frame.srcdoc) return false;
+        const html = frame.srcdoc;
+        frame.srcdoc = '';
+        window.setTimeout(() => {
+            frame.srcdoc = html;
+            try {
+                frame.contentWindow && frame.contentWindow.dispatchEvent(new Event('resize'));
+            } catch (error) {
+                /* iframe may still be navigating */
+            }
+        }, 0);
+        return true;
+    }
+
+    function nudgePreviewFrameLayout(frame) {
+        if (!frame) return;
+        try {
+            const win = frame.contentWindow;
+            const doc = frame.contentDocument || (win && win.document);
+            if (win) win.dispatchEvent(new Event('resize'));
+            if (doc) {
+                const canvas = doc.querySelector('canvas');
+                if (canvas && (!canvas.width || !canvas.height)) {
+                    const rect = frame.getBoundingClientRect();
+                    canvas.width = Math.max(320, Math.round(rect.width || 800));
+                    canvas.height = Math.max(240, Math.round(rect.height || 450));
+                    if (win) win.dispatchEvent(new Event('resize'));
+                }
+            }
+        } catch (error) {
+            /* Cross-origin previews cannot be nudged directly. */
+        }
     }
 
     function refreshWorkspacePreviewProject(workspace, container, plan, project) {
@@ -7666,10 +9236,12 @@ Lock Game Type to "Bullet Hell / Flying Shooter" and genre to "bullet-hell".`
             if (html) {
                 frame.removeAttribute('loading');
                 frame.srcdoc = html;
+                frame.__pendingVisibleReload = workspace.dataset.generatedView !== 'preview';
                 if (previewUrl) frame.dataset.previewUrl = previewUrl;
             } else if (previewUrl) {
                 frame.removeAttribute('srcdoc');
                 frame.src = previewUrl;
+                frame.__pendingVisibleReload = false;
             }
         }
         workspace.querySelectorAll('[data-game-action="preview"]').forEach(button => {
@@ -7677,26 +9249,61 @@ Lock Game Type to "Bullet Hell / Flying Shooter" and genre to "bullet-hell".`
         });
         const label = workspace.querySelector('.workspace-stage-label strong');
         if (label) label.textContent = 'Edited preview ready';
+        const sourceEvidence = workspaceProjectModeLabel(project || {});
+        workspace.querySelectorAll('[data-workspace-source-evidence]').forEach(node => {
+            node.textContent = sourceEvidence;
+        });
+        syncWorkspacePreviewStageSize(workspace);
         refreshWorkspaceCodePanel(workspace, plan);
         if (container) {
             container.__gameEditRuntime = container.__gameEditRuntime || {};
         }
     }
 
-    async function ensureTemplateProject(plan, spec = getCurrentGameSpec(), progress = null) {
+    async function ensureAIDirectProject(plan, spec = getCurrentGameSpec(), progress = null) {
         if (!plan || !plan.decision || !plan.decision.canAutoGenerate) return plan;
         if (plan.generatedProject) return plan;
         const sourceSpec = applyProductionPlanToSpec(spec, plan.productionPlan || latestGamePlan);
+        const cancelToken = progress && progress.cancelToken;
         try {
+            assertGenerationNotCancelled(cancelToken);
+            if (progress && progress.workfeedHandle) {
+                updateChatWorkfeedStep(progress.workfeedHandle, 'generate', {
+                    status: 'running',
+                    summary: 'Calling the selected AI model for complete game files.'
+                });
+            }
             if (progress) progress.setStage('generate', 15, 70, AI_DIRECT_GENERATION_TIMEOUT_MS, 'Generating a complete playable HTML5 game with AI direct...');
             const project = await withTimeout(
                 generateAIDirectGameProject(sourceSpec, plan.productionPlan || latestGamePlan, plan.productionBrief || ''),
                 AI_DIRECT_GENERATION_TIMEOUT_MS,
                 'AI direct game generation'
             );
+            assertGenerationNotCancelled(cancelToken);
+            if (progress && progress.workfeedHandle) {
+                advanceChatWorkfeed(progress.workfeedHandle, 'generate', {
+                    summary: project.modelMeta
+                        ? `Model response received from ${modelMetaDisplay(project.modelMeta) || 'the selected model'}.`
+                        : 'Model response received.'
+                });
+            }
             if (progress) progress.completeStage('generate');
             if (progress) progress.setStage('validate', 70, 90, 5000, 'Validating generated game...');
+            assertGenerationNotCancelled(cancelToken);
             addExecutionEvent('Validating generated game', project.validationReport && project.validationReport.ok === false ? 'warning' : 'done', project.validationReport ? JSON.stringify(project.validationReport, null, 2).slice(0, 1200) : 'Backend validation report accepted.');
+            if (progress && progress.workfeedHandle) {
+                updateChatWorkfeedStep(progress.workfeedHandle, 'validate', {
+                    status: project.validationReport && project.validationReport.ok === false ? 'warning' : 'done',
+                    summary: project.validationReport
+                        ? (project.validationReport.ok === false ? 'Backend validation returned issues to review.' : 'Backend validation passed.')
+                        : 'Backend validation report received.'
+                });
+                updateChatWorkfeedStep(progress.workfeedHandle, 'preview', {
+                    status: 'running',
+                    summary: 'Preparing the returned project in the browser workspace.'
+                });
+            }
+            assertGenerationNotCancelled(cancelToken);
             plan.generatedProject = project;
             plan.generationMode = 'ai_direct';
             plan.aiDirectGeneration = {
@@ -7707,20 +9314,39 @@ Lock Game Type to "Bullet Hell / Flying Shooter" and genre to "bullet-hell".`
                 productionBrief: plan.productionBrief || ''
             };
             await persistWorkspacePlanSnapshot(plan, 'generation_project_ready');
+            assertGenerationNotCancelled(cancelToken);
             if (project.modelMeta) analysisState.finalModelMeta = project.modelMeta;
             if (progress) progress.completeStage('validate');
             if (progress) progress.setStage('preview', 90, 98, 2500, 'Preparing playable preview...');
+            assertGenerationNotCancelled(cancelToken);
             addExecutionEvent('Preview ready', 'done', project.previewUrl || '');
             if (progress) progress.completeStage('preview');
             return plan;
         } catch (error) {
+            if (isGenerationCancelled(error)) throw error;
             addExecutionEvent('Generation failed', 'failed', error && (error.message || String(error)), { open: true });
+            if (progress && progress.workfeedHandle) {
+                failChatWorkfeed(progress.workfeedHandle, 'generate', error && (error.message || String(error)));
+            }
             recordDiagnostic('ai-direct-generation-failed', {
                 phase: 'AI direct game generation',
                 message: error && (error.message || String(error))
             });
             throw classifyAIFlowError(error, 'AI direct game generation');
         }
+    }
+
+    async function generateProjectByMode(plan, spec = getCurrentGameSpec(), progress = null) {
+        if (!plan || !plan.decision || !plan.decision.canAutoGenerate) return plan;
+        if (plan.generatedProject) return plan;
+        const requestedMode = plan.generationMode || plan.decision.generationMode || 'ai_direct';
+        if (requestedMode === 'template_assisted') {
+            const availabilityError = getTemplateAvailabilityError(plan.decision);
+            if (!availabilityError) return TemplateAssistedGenerator(plan, spec, progress);
+            addExecutionEvent('Template unavailable - using AI direct', 'warning', availabilityError);
+        }
+        plan.generationMode = 'ai_direct';
+        return ensureAIDirectProject(plan, spec, progress);
     }
 
     function buildEnhancedPlanHtml(plan) {
@@ -7740,17 +9366,16 @@ Lock Game Type to "Bullet Hell / Flying Shooter" and genre to "bullet-hell".`
     }
 
     function buildGameSpecPlainText(spec = getCurrentGameSpec()) {
+        const rows = getGameSpecDisplayRows(spec);
         return [
             'GameSpec modules',
-            `Game Type: ${spec.gameType}`,
-            `Art Style: ${spec.artStyle}`,
-            `Game Setting: ${spec.gameSetting}`,
+            ...rows.map(row => {
+                const value = row.detail && normalizeAnswerText(row.detail) !== normalizeAnswerText(row.label)
+                    ? `${row.label} - ${row.detail}`
+                    : row.label;
+                return `${row.title}: ${value}`;
+            }),
             `Background/Story: ${spec.background}`,
-            `Core Gameplay: ${spec.coreGameplay}`,
-            `Player Goal: ${spec.playerGoal}`,
-            `Main Challenge: ${spec.mainChallenge}`,
-            `Progression System: ${spec.progressionSystem}`,
-            `Difficulty Level: ${spec.difficultyLevel}`,
             'Generation Mode: AI direct HTML5 Canvas'
         ].join('\n');
     }
@@ -7775,7 +9400,7 @@ Lock Game Type to "Bullet Hell / Flying Shooter" and genre to "bullet-hell".`
         ].join('\n');
     }
 
-    function buildAISummaryHtml(plan) {
+    function buildAISummaryHtml(plan, spec = getCurrentGameSpec(), options = {}) {
         const safePlan = {
             title: plan.title || 'Untitled Game Concept',
             hook: plan.hook || 'A compact game concept ready for generation.',
@@ -7788,12 +9413,14 @@ Lock Game Type to "Bullet Hell / Flying Shooter" and genre to "bullet-hell".`
             playerFantasy: plan.playerFantasy || 'Step into a clear role and chase a focused goal.',
             prototypeScope: plan.prototypeScope || 'Build one compact playable loop with win, fail, pause, and restart states.'
         };
-        latestGamePlan = normalizeGamePlanForGeneration(safePlan, getCurrentGameSpec());
-        latestGamePlanDraft = buildGamePlanDraftText(latestGamePlan);
+        latestGamePlan = normalizeGamePlanForGeneration(safePlan, spec);
+        latestGamePlanDraft = buildGamePlanDraftText(latestGamePlan, spec);
 
         return [
-            '<div class="selection-summary ai-plan-summary">',
+            `<div class="selection-summary ai-plan-summary${options.fallback ? ' gamespec-fallback-summary' : ''}">`,
+            options.fallback ? '<div class="summary-item"><strong>Brief source:</strong> Local product fallback</div>' : '',
             buildEnhancedPlanHtml(latestGamePlan),
+            buildGameSpecSummaryRowsHtml(spec),
             '</div>'
         ].join('');
     }
@@ -7956,6 +9583,87 @@ Lock Game Type to "Bullet Hell / Flying Shooter" and genre to "bullet-hell".`
         }
     ];
     const GAME_EDIT_CATEGORIES = GAME_EDIT_MODULES.flatMap(module => module.sections);
+    const WORKSPACE_MODULE_CAPABILITY_REQUIREMENTS = {
+        media: {
+            key: 'supportsL2',
+            label: 'Media editing needs generated asset slots.'
+        },
+        tools: {
+            key: 'supportsL3',
+            label: 'Local tools need an editable asset pipeline.'
+        }
+    };
+
+    function getGeneratedProjectCapabilities(project = null) {
+        const reportCapabilities = project && project.generationReport && typeof project.generationReport === 'object'
+            ? project.generationReport.capabilities
+            : null;
+        return {
+            supportsL1: true,
+            supportsL2: false,
+            supportsL3: false,
+            supportsL4: false,
+            ...(reportCapabilities && typeof reportCapabilities === 'object' ? reportCapabilities : {}),
+            ...(project && project.capabilities && typeof project.capabilities === 'object' ? project.capabilities : {})
+        };
+    }
+
+    function getWorkspaceModuleCapabilityState(moduleId, project = null) {
+        if (!moduleId || moduleId === 'stats') {
+            return { available: true, readonly: false, label: '' };
+        }
+        const capabilities = getGeneratedProjectCapabilities(project);
+        const requirement = WORKSPACE_MODULE_CAPABILITY_REQUIREMENTS[moduleId];
+        if (requirement && capabilities[requirement.key] !== true) {
+            return {
+                available: false,
+                readonly: false,
+                label: requirement.label
+            };
+        }
+        if (moduleId === 'code' && capabilities.supportsL4 !== true) {
+            return {
+                available: true,
+                readonly: true,
+                label: 'Runtime code is view-only for this generated project.'
+            };
+        }
+        return { available: true, readonly: false, label: '' };
+    }
+
+    function workspaceModuleTabCount(moduleId, project = null, generated = null) {
+        if (moduleId === 'stats') return Object.keys(getWorkspaceNumericSettingsForProject(project)).length;
+        if (moduleId === 'media') return WORKSPACE_MEDIA_STRUCTURE.length;
+        if (moduleId === 'tools') return DROI_GAME_TOOLS.length;
+        return buildWorkspaceCodeFiles(project, generated, null).length;
+    }
+
+    function workspaceModuleLabel(module) {
+        if (!module) return '';
+        if (module.id === 'stats') return 'Home';
+        if (module.id === 'tools') return 'Tools';
+        return module.label;
+    }
+
+    function buildWorkspaceModuleTabHtml(module, project = null, generated = null) {
+        const state = getWorkspaceModuleCapabilityState(module.id, project);
+        const classes = [
+            'game-edit-tab',
+            module.id === 'stats' ? 'active' : '',
+            module.id !== 'stats' ? 'advanced-only' : '',
+            !state.available ? 'capability-locked' : '',
+            state.readonly ? 'is-readonly' : ''
+        ].filter(Boolean).join(' ');
+        const lockLabel = !state.available
+            ? '<span class="tab-lock-label">Unavailable</span>'
+            : state.readonly
+                ? '<span class="tab-lock-label">Read-only</span>'
+                : '';
+        return `
+                    <button type="button" class="${classes}" data-edit-module-tab="${escapeHtml(module.id)}" data-capability-available="${state.available ? 'true' : 'false'}" data-capability-readonly="${state.readonly ? 'true' : 'false'}" data-capability-message="${escapeHtml(state.label)}">${escapeHtml(workspaceModuleLabel(module))}<small>${workspaceModuleTabCount(module.id, project, generated)}</small>${lockLabel}</button>
+                `;
+    }
+
     const DROI_GAME_TOOL_PROTOCOL = 'droi-game-tool/v1';
     const DROI_GAME_TOOL_URL_PARAM = new URLSearchParams(window.location.search).get('toolUrl');
     const DROI_GAME_TOOL_BASE_URL = DROI_GAME_TOOL_URL_PARAM || window.DROI_GAME_TOOL_URL || (
@@ -7972,99 +9680,6 @@ Lock Game Type to "Bullet Hell / Flying Shooter" and genre to "bullet-hell".`
         { id: 'image-process', title: 'Image Process', description: 'Crop, resize, matte, outline, and transparent PNG export.' },
         { id: 'character-action', title: 'Character Action', description: 'Character frame/action pack composition.' }
     ];
-    const WORKSPACE_NUMERIC_SETTINGS = {
-        'combat.fireRate': {
-            label: 'Fire Rate',
-            helper: 'Lower cooldown means faster auto-fire.',
-            min: 0.08,
-            max: 1.5,
-            step: 0.01,
-            defaultValue: 0.55,
-            runtimeKey: 'fireRate',
-            easy: 0.72,
-            normal: 0.55,
-            hard: 0.32,
-            format: value => `${Number(value).toFixed(2)}s`
-        },
-        'combat.damage': {
-            label: 'Damage',
-            helper: 'Bullet hit power applied by the preview runtime.',
-            min: 4,
-            max: 80,
-            step: 1,
-            defaultValue: 18,
-            runtimeKey: 'damage',
-            easy: 26,
-            normal: 18,
-            hard: 12,
-            format: value => `${Math.round(Number(value))}`
-        },
-        'combat.range': {
-            label: 'Attack Range',
-            helper: 'Target acquisition range for auto-fire.',
-            min: 120,
-            max: 760,
-            step: 10,
-            defaultValue: 420,
-            runtimeKey: 'range',
-            easy: 560,
-            normal: 420,
-            hard: 280,
-            format: value => `${Math.round(Number(value))}px`
-        },
-        'combat.enemyHp': {
-            label: 'Enemy HP',
-            helper: 'Enemy durability multiplier.',
-            min: 0.5,
-            max: 2,
-            step: 0.05,
-            defaultValue: 1,
-            runtimeKey: 'enemyHpMultiplier',
-            easy: 0.75,
-            normal: 1,
-            hard: 1.35,
-            format: value => `${Number(value).toFixed(2)}x`
-        },
-        'combat.enemySpeed': {
-            label: 'Enemy Speed',
-            helper: 'Movement pressure multiplier.',
-            min: 0.45,
-            max: 2.4,
-            step: 0.05,
-            defaultValue: 1,
-            runtimeKey: 'enemySpeedMultiplier',
-            easy: 0.75,
-            normal: 1,
-            hard: 1.35,
-            format: value => `${Number(value).toFixed(2)}x`
-        },
-        'combat.wave': {
-            label: 'Wave Intensity',
-            helper: 'Spawn pressure multiplier.',
-            min: 0.5,
-            max: 2,
-            step: 0.05,
-            defaultValue: 1,
-            runtimeKey: 'waveMultiplier',
-            easy: 0.75,
-            normal: 1,
-            hard: 1.3,
-            format: value => `${Number(value).toFixed(2)}x`
-        },
-        'output.performance': {
-            label: 'Target FPS',
-            helper: 'Runtime performance target stored as a patch.',
-            min: 30,
-            max: 120,
-            step: 5,
-            defaultValue: 60,
-            runtimeKey: 'targetFps',
-            easy: 60,
-            normal: 60,
-            hard: 90,
-            format: value => `${Math.round(Number(value))} FPS`
-        }
-    };
     const WORKSPACE_MEDIA_STRUCTURE = [
         {
             id: 'visual',
@@ -8115,6 +9730,85 @@ Lock Game Type to "Bullet Hell / Flying Shooter" and genre to "bullet-hell".`
         return Math.max(min, Math.min(max, number));
     }
 
+    function formatWorkspaceNumericValue(value, setting = {}) {
+        const number = Number(value);
+        const safeNumber = Number.isFinite(number) ? number : Number(setting.defaultValue || 0);
+        const format = String(setting.format || setting.displayFormat || '').toLowerCase();
+        const unit = String(setting.unit || '').trim();
+        if (format === 'integer' || setting.step >= 1) return `${Math.round(safeNumber)}${unit ? unit : ''}`;
+        const precision = Number.isFinite(Number(setting.precision)) ? Number(setting.precision) : 2;
+        return `${safeNumber.toFixed(precision)}${unit ? unit : ''}`;
+    }
+
+    function normalizeWorkspaceNumericSetting(raw, fallbackId = '') {
+        if (!raw || typeof raw !== 'object') return null;
+        const id = String(raw.id || raw.key || raw.name || fallbackId || '').trim();
+        if (!id) return null;
+        const min = Number(raw.min);
+        const max = Number(raw.max);
+        const defaultValue = Number(raw.defaultValue ?? raw.default ?? raw.value ?? raw.normal ?? raw.min);
+        if (!Number.isFinite(min) || !Number.isFinite(max) || max <= min || !Number.isFinite(defaultValue)) return null;
+        const step = Number.isFinite(Number(raw.step)) && Number(raw.step) > 0 ? Number(raw.step) : (max - min > 20 ? 1 : 0.01);
+        const normalized = {
+            id,
+            label: String(raw.label || raw.title || id.replace(/[._-]+/g, ' ')),
+            helper: String(raw.helper || raw.description || raw.summary || 'Safe runtime value exposed by this generated project.'),
+            min,
+            max,
+            step,
+            defaultValue: clampWorkspaceNumber(defaultValue, min, max),
+            runtimeKey: String(raw.runtimeKey || raw.path || raw.key || id),
+            categoryId: String(raw.categoryId || raw.category || (id.includes('.') ? id.split('.')[0] : 'tuning')),
+            easy: Number.isFinite(Number(raw.easy)) ? Number(raw.easy) : clampWorkspaceNumber(defaultValue + ((max - min) * 0.15), min, max),
+            normal: Number.isFinite(Number(raw.normal)) ? Number(raw.normal) : clampWorkspaceNumber(defaultValue, min, max),
+            hard: Number.isFinite(Number(raw.hard)) ? Number(raw.hard) : clampWorkspaceNumber(defaultValue - ((max - min) * 0.15), min, max),
+            format: value => formatWorkspaceNumericValue(value, raw)
+        };
+        normalized.easy = clampWorkspaceNumber(normalized.easy, min, max);
+        normalized.normal = clampWorkspaceNumber(normalized.normal, min, max);
+        normalized.hard = clampWorkspaceNumber(normalized.hard, min, max);
+        return normalized;
+    }
+
+    function normalizeWorkspaceNumericSettingsFromSource(source) {
+        const settings = {};
+        if (Array.isArray(source)) {
+            source.forEach((entry, index) => {
+                const setting = normalizeWorkspaceNumericSetting(entry, entry && (entry.id || entry.key) || `control.${index + 1}`);
+                if (setting) settings[setting.id] = setting;
+            });
+        } else if (source && typeof source === 'object') {
+            Object.entries(source).forEach(([id, entry]) => {
+                const setting = normalizeWorkspaceNumericSetting(entry && typeof entry === 'object' ? entry : { value: entry }, id);
+                if (setting) settings[setting.id] = setting;
+            });
+        }
+        return settings;
+    }
+
+    function getWorkspaceNumericSettingsForProject(project = null) {
+        const sources = [
+            project && project.numericControls,
+            project && project.capabilities && project.capabilities.numericControls,
+            project && project.generationReport && project.generationReport.numericControls,
+            project && project.generationReport && project.generationReport.capabilities && project.generationReport.capabilities.numericControls,
+            project && project.generationReport && project.generationReport.workspace && project.generationReport.workspace.numericControls
+        ];
+        for (const source of sources) {
+            const settings = normalizeWorkspaceNumericSettingsFromSource(source);
+            if (Object.keys(settings).length) return settings;
+        }
+        return {};
+    }
+
+    function getWorkspaceNumericSettings(workspace) {
+        if (workspace && workspace.__numericSettings) return workspace.__numericSettings;
+        const plan = workspace && (workspace.__plan || workspace.__generationPlan);
+        const settings = getWorkspaceNumericSettingsForProject(plan && plan.generatedProject);
+        if (workspace) workspace.__numericSettings = settings;
+        return settings;
+    }
+
     function getWorkspaceState(workspace) {
         if (!workspace.__state) {
             workspace.__state = {
@@ -8133,8 +9827,9 @@ Lock Game Type to "Bullet Hell / Flying Shooter" and genre to "bullet-hell".`
                 draftNumericValues: {},
                 dirtyNumericValues: {},
                 numericDraftBaseValues: {},
-                selectedNumericItemId: 'combat.enemySpeed',
+                selectedNumericItemId: '',
                 pendingRuntimePatches: [],
+                editEnvelopes: [],
                 toolArtifacts: [],
                 selectedMediaKey: '',
                 selectedMediaAssetId: '',
@@ -8142,7 +9837,11 @@ Lock Game Type to "Bullet Hell / Flying Shooter" and genre to "bullet-hell".`
                 codeSelectedPath: '',
                 codeSelectedFolder: '',
                 exportState: {},
-                saveWarnings: []
+                saveWarnings: [],
+                saveState: 'saved',
+                projectInfoDraft: {},
+                projectInfoDirty: false,
+                publishChecklist: []
             };
         }
         return workspace.__state;
@@ -8255,6 +9954,7 @@ Lock Game Type to "Bullet Hell / Flying Shooter" and genre to "bullet-hell".`
         if (!state.createdAt) state.createdAt = new Date().toISOString();
         workspace.dataset.workspaceId = workspaceId;
         workspace.dataset.projectId = projectId;
+        workspace.__projectKey = projectId;
         return { workspaceId, projectId };
     }
 
@@ -8335,7 +10035,7 @@ Lock Game Type to "Bullet Hell / Flying Shooter" and genre to "bullet-hell".`
 
     function collectWorkspaceDraft(workspace) {
         return {
-            chatInput: chatInputField ? chatInputField.value : '',
+            chatInput: chatInputField ? redactSensitiveText(chatInputField.value) : '',
             placeholder: chatInputField ? chatInputField.placeholder : '',
             savedAt: new Date().toISOString()
         };
@@ -8348,6 +10048,16 @@ Lock Game Type to "Bullet Hell / Flying Shooter" and genre to "bullet-hell".`
             dirtyNumericValues: { ...(state.dirtyNumericValues || {}) },
             numericDraftBaseValues: { ...(state.numericDraftBaseValues || {}) },
             committedNumericValues: { ...(state.committedNumericValues || {}) }
+        };
+    }
+
+    function collectWorkspaceProjectInfoDraft(workspace) {
+        const state = getWorkspaceState(workspace);
+        return {
+            draft: { ...(state.projectInfoDraft || {}) },
+            dirty: Boolean(state.projectInfoDirty),
+            saveState: state.saveState || 'saved',
+            publishChecklist: Array.isArray(state.publishChecklist) ? state.publishChecklist.slice() : []
         };
     }
 
@@ -8364,7 +10074,7 @@ Lock Game Type to "Bullet Hell / Flying Shooter" and genre to "bullet-hell".`
                 version,
                 title: titleText.replace(version, '').trim() || 'Workspace change',
                 category: button.querySelector('.change-record-top small')?.textContent || 'Local',
-                prompt: button.dataset.historyPrompt || button.querySelector('.change-record-prompt')?.textContent || '',
+                prompt: button.dataset.historyPrompt || '',
                 summary: button.querySelector('.change-record-meta')?.textContent || '',
                 trustLevel: button.dataset.historyTrust || 'local_draft',
                 createdAt: button.dataset.historyCreatedAt || new Date().toISOString()
@@ -8388,6 +10098,7 @@ Lock Game Type to "Bullet Hell / Flying Shooter" and genre to "bullet-hell".`
             cloudCheckpoint: false,
             uiState: collectWorkspaceUiState(workspace),
             draft: collectWorkspaceDraft(workspace),
+            projectInfo: collectWorkspaceProjectInfoDraft(workspace),
             numericDraft: collectWorkspaceNumericDraft(workspace),
             patches: buildWorkspacePatches(workspace),
             history: collectWorkspaceHistoryRecords(workspace),
@@ -8414,6 +10125,7 @@ Lock Game Type to "Bullet Hell / Flying Shooter" and genre to "bullet-hell".`
                 selectedItemId: ''
             },
             draft: {},
+            projectInfo: {},
             numericDraft: {},
             patches: {},
             history: [],
@@ -8493,9 +10205,15 @@ Lock Game Type to "Bullet Hell / Flying Shooter" and genre to "bullet-hell".`
         const patches = snapshot.patches || {};
         state.numericValues = { ...(patches.numericValues || state.numericValues || {}) };
         state.pendingRuntimePatches = Array.isArray(patches.pendingRuntimePatches) ? patches.pendingRuntimePatches : state.pendingRuntimePatches || [];
+        state.editEnvelopes = Array.isArray(patches.editEnvelopes) ? patches.editEnvelopes : state.editEnvelopes || [];
         state.toolArtifacts = Array.isArray(patches.toolArtifacts) ? patches.toolArtifacts : state.toolArtifacts || [];
         state.historyRecords = Array.isArray(snapshot.history) ? snapshot.history : [];
         state.exportState = snapshot.exportState || state.exportState || {};
+        const projectInfo = snapshot.projectInfo || {};
+        state.projectInfoDraft = projectInfo.draft && typeof projectInfo.draft === 'object' ? { ...projectInfo.draft } : state.projectInfoDraft || {};
+        state.projectInfoDirty = Boolean(projectInfo.dirty);
+        state.saveState = projectInfo.saveState || state.saveState || (state.projectInfoDirty ? 'unsaved' : 'saved');
+        state.publishChecklist = Array.isArray(projectInfo.publishChecklist) ? projectInfo.publishChecklist : state.publishChecklist || [];
         return snapshot;
     }
 
@@ -8505,7 +10223,7 @@ Lock Game Type to "Bullet Hell / Flying Shooter" and genre to "bullet-hell".`
     }
 
     function workspaceRuntimeNumericValue(workspace, itemId) {
-        const setting = WORKSPACE_NUMERIC_SETTINGS[itemId];
+        const setting = getWorkspaceNumericSettings(workspace)[itemId];
         if (!setting) return 0;
         const runtime = findWorkspaceRuntime(workspace);
         const config = runtime && runtime.getConfig ? runtime.getConfig() : {};
@@ -8515,7 +10233,7 @@ Lock Game Type to "Bullet Hell / Flying Shooter" and genre to "bullet-hell".`
 
     function ensureWorkspaceCommittedNumericValue(workspace, itemId) {
         const state = getWorkspaceState(workspace);
-        const setting = WORKSPACE_NUMERIC_SETTINGS[itemId];
+        const setting = getWorkspaceNumericSettings(workspace)[itemId];
         if (!setting) return 0;
         if (!state.committedNumericValues) state.committedNumericValues = {};
         if (Number.isFinite(Number(state.committedNumericValues[itemId]))) {
@@ -8530,7 +10248,7 @@ Lock Game Type to "Bullet Hell / Flying Shooter" and genre to "bullet-hell".`
 
     function workspaceNumericValue(workspace, itemId) {
         const state = getWorkspaceState(workspace);
-        const setting = WORKSPACE_NUMERIC_SETTINGS[itemId];
+        const setting = getWorkspaceNumericSettings(workspace)[itemId];
         if (!setting) return 0;
         if (Number.isFinite(Number(state.draftNumericValues && state.draftNumericValues[itemId]))) return Number(state.draftNumericValues[itemId]);
         if (Number.isFinite(Number(state.numericValues[itemId]))) return Number(state.numericValues[itemId]);
@@ -8627,22 +10345,23 @@ Lock Game Type to "Bullet Hell / Flying Shooter" and genre to "bullet-hell".`
         return url.toString();
     }
 
-    function buildWorkspaceNumericPanelHtml() {
-        const numericIds = Object.keys(WORKSPACE_NUMERIC_SETTINGS);
+    function buildWorkspaceNumericPanelHtml(project = null) {
+        const numericSettings = getWorkspaceNumericSettingsForProject(project);
+        const numericIds = Object.keys(numericSettings);
         return `
             <section class="workspace-numeric-panel" data-workspace-numeric-panel>
                 <div class="workspace-numeric-head">
                     <div>
                         <strong>Direct numeric controls</strong>
-                        <small>Adjust drafts freely. History is written only when you apply changes.</small>
+                        <small>${numericIds.length ? 'Adjust drafts freely. History is written only when you apply changes.' : 'No safe runtime sliders were exposed by this generated project.'}</small>
                     </div>
                     <span>${numericIds.length}</span>
                 </div>
-                <div class="workspace-numeric-grid">
+                ${numericIds.length ? '<div class="workspace-numeric-grid">' : '<div class="workspace-numeric-empty" data-workspace-numeric-empty><strong>No quick numeric controls</strong><small>Use the chat box to describe balance, pacing, controls, or UI changes for this game.</small><button type="button" data-generated-view-set="chat">Back to chat</button></div><div class="workspace-numeric-grid" hidden>'}
                     ${numericIds.map(itemId => {
-                        const setting = WORKSPACE_NUMERIC_SETTINGS[itemId];
+                        const setting = numericSettings[itemId];
                         return `
-                            <article class="workspace-numeric-card${itemId === 'combat.enemySpeed' ? ' selected' : ''}" data-numeric-control="${escapeHtml(itemId)}" data-edit-item="${escapeHtml(itemId)}" data-edit-category-id="${escapeHtml(itemId.startsWith('output.') ? 'output' : 'combat')}" data-edit-type="number" data-edit-title="${escapeHtml(setting.label)}">
+                            <article class="workspace-numeric-card${itemId === numericIds[0] ? ' selected' : ''}" data-numeric-control="${escapeHtml(itemId)}" data-edit-item="${escapeHtml(itemId)}" data-edit-category-id="${escapeHtml(setting.categoryId)}" data-edit-type="number" data-edit-title="${escapeHtml(setting.label)}">
                                 <div class="workspace-numeric-card-head">
                                     <div>
                                         <strong>${escapeHtml(setting.label)}</strong>
@@ -8666,7 +10385,7 @@ Lock Game Type to "Bullet Hell / Flying Shooter" and genre to "bullet-hell".`
                 <div class="workspace-numeric-apply-bar" data-numeric-apply-bar>
                     <div>
                         <strong data-numeric-apply-title>No numeric changes</strong>
-                        <small data-numeric-apply-summary>Move sliders or choose presets, then apply once.</small>
+                        <small data-numeric-apply-summary>${numericIds.length ? 'Move sliders or choose presets, then apply once.' : 'No numeric controls are available for this project.'}</small>
                     </div>
                     <div class="workspace-numeric-apply-actions">
                         <button type="button" data-numeric-reset-selected>Reset selected</button>
@@ -8925,6 +10644,52 @@ console.log('Droi generated game:', GAME_TITLE);`
                 }, null, 2)
             });
         }
+        const projectMeta = project && project.projectMeta && typeof project.projectMeta === 'object' ? project.projectMeta : null;
+        if (projectMeta) {
+            const upsertLocalJsonFile = (path, content, options = {}) => {
+                const normalized = normalizeWorkspacePath(path);
+                const index = files.findIndex(file => file.path === normalized);
+                const next = {
+                    path: normalized,
+                    language: options.language || 'json',
+                    kind: options.kind || 'metadata',
+                    content: JSON.stringify(content, null, 2),
+                    size: JSON.stringify(content).length,
+                    text: true
+                };
+                if (index >= 0) files[index] = { ...files[index], ...next };
+                else files.push(next);
+            };
+            const manifestFile = files.find(file => file.path === 'assets/manifest.json');
+            const manifest = parseWorkspaceJsonContent(manifestFile && manifestFile.content, {
+                assetArchitecture: ['Audio & Feel', 'Game Art', 'Ui Art', 'Visual Style'],
+                assets: []
+            });
+            manifest.projectMeta = {
+                ...(manifest.projectMeta && typeof manifest.projectMeta === 'object' ? manifest.projectMeta : {}),
+                ...projectMeta
+            };
+            if (!manifest.metadata || typeof manifest.metadata !== 'object') manifest.metadata = {};
+            manifest.metadata.projectTitle = projectMeta.title || projectMeta.projectName || manifest.metadata.projectTitle || '';
+            manifest.metadata.projectDescription = projectMeta.description || projectMeta.englishDescription || manifest.metadata.projectDescription || '';
+            manifest.metadata.coverImage = projectMeta.coverImage || manifest.metadata.coverImage || null;
+            upsertLocalJsonFile('assets/manifest.json', manifest, { kind: 'manifest' });
+
+            const reportFile = files.find(file => file.path === 'generation-report.json');
+            const report = parseWorkspaceJsonContent(reportFile && reportFile.content, {
+                generatedAt: new Date().toISOString(),
+                title: projectMeta.title || projectMeta.projectName || 'Generated Canvas Game',
+                workspace: 'Droi AI Game Editor'
+            });
+            report.projectMeta = {
+                ...(report.projectMeta && typeof report.projectMeta === 'object' ? report.projectMeta : {}),
+                ...projectMeta
+            };
+            report.title = report.title || projectMeta.title || projectMeta.projectName || '';
+            report.description = report.description || projectMeta.description || projectMeta.englishDescription || '';
+            upsertLocalJsonFile('generation-report.json', report, { kind: 'report' });
+            upsertLocalJsonFile('project-meta.json', projectMeta, { kind: 'projectMeta' });
+        }
         const unique = new Map();
         files.forEach(file => unique.set(file.path, file));
         return Array.from(unique.values()).sort((a, b) => a.path.localeCompare(b.path));
@@ -8965,6 +10730,54 @@ console.log('Droi generated game:', GAME_TITLE);`
         } catch (_) {
             return JSON.parse(JSON.stringify(fallback));
         }
+    }
+
+    function readGeneratedProjectCodeFileDirect(project, path) {
+        const normalized = normalizeWorkspacePath(path);
+        const files = project && Array.isArray(project.codeFiles) ? project.codeFiles : [];
+        return files.find(file => normalizeWorkspacePath(file.path || file.name || '') === normalized) || null;
+    }
+
+    function syncProjectMetaToGeneratedProject(plan, projectMeta) {
+        if (!plan || !plan.generatedProject || !projectMeta || typeof projectMeta !== 'object') return;
+        const project = plan.generatedProject;
+        project.projectMeta = {
+            ...(project.projectMeta && typeof project.projectMeta === 'object' ? project.projectMeta : {}),
+            ...projectMeta,
+            updatedAt: projectMeta.updatedAt || new Date().toISOString()
+        };
+        upsertGeneratedProjectCodeFile(plan, 'project-meta.json', JSON.stringify(project.projectMeta, null, 2), { language: 'json', kind: 'projectMeta' });
+
+        const manifestFile = readGeneratedProjectCodeFileDirect(project, 'assets/manifest.json');
+        const manifest = parseWorkspaceJsonContent(manifestFile && manifestFile.content, {
+            assetArchitecture: ['Audio & Feel', 'Game Art', 'Ui Art', 'Visual Style'],
+            assets: []
+        });
+        manifest.projectMeta = {
+            ...(manifest.projectMeta && typeof manifest.projectMeta === 'object' ? manifest.projectMeta : {}),
+            ...project.projectMeta
+        };
+        if (!manifest.metadata || typeof manifest.metadata !== 'object') manifest.metadata = {};
+        manifest.metadata.projectTitle = project.projectMeta.title || project.projectMeta.projectName || manifest.metadata.projectTitle || '';
+        manifest.metadata.projectDescription = project.projectMeta.description || project.projectMeta.englishDescription || manifest.metadata.projectDescription || '';
+        manifest.metadata.coverImage = project.projectMeta.coverImage || manifest.metadata.coverImage || null;
+        upsertGeneratedProjectCodeFile(plan, 'assets/manifest.json', JSON.stringify(manifest, null, 2), { language: 'json', kind: 'manifest' });
+
+        const reportFile = readGeneratedProjectCodeFileDirect(project, 'generation-report.json');
+        const report = parseWorkspaceJsonContent(reportFile && reportFile.content, {
+            generatedAt: new Date().toISOString(),
+            title: project.projectMeta.title || project.projectMeta.projectName || 'Generated Canvas Game',
+            workspace: 'Droi AI Game Editor'
+        });
+        report.projectMeta = {
+            ...(report.projectMeta && typeof report.projectMeta === 'object' ? report.projectMeta : {}),
+            ...project.projectMeta
+        };
+        report.title = project.projectMeta.title || project.projectMeta.projectName || report.title || '';
+        report.description = project.projectMeta.description || project.projectMeta.englishDescription || report.description || '';
+        upsertGeneratedProjectCodeFile(plan, 'generation-report.json', JSON.stringify(report, null, 2), { language: 'json', kind: 'report' });
+        project.generationReport = report;
+        project.assetManifest = manifest;
     }
 
     function appendWorkspaceEditEntry(target, entry) {
@@ -9099,6 +10912,9 @@ console.log('Droi generated game:', GAME_TITLE);`
         appendWorkspaceEditEntry(report, patchSummary);
         report.lastWorkspaceEdit = patchSummary;
         upsertGeneratedProjectCodeFile(plan, 'generation-report.json', JSON.stringify(report, null, 2), { language: 'json', kind: 'report' });
+        if (plan.generatedProject) {
+            plan.generatedProject.generationReport = report;
+        }
 
         upsertGeneratedProjectCodeFile(plan, 'workspace-edits/latest-edit.json', JSON.stringify(patchSummary, null, 2), { language: 'json', kind: 'patch' });
         upsertGeneratedProjectCodeFile(plan, 'workspace-edits/latest-edit.md', [
@@ -9364,7 +11180,7 @@ console.log('Droi generated game:', GAME_TITLE);`
         return `
             <div class="workspace-code-compact" data-workspace-code-panel>
                 <div class="workspace-code-toolbar">
-                    <input type="search" placeholder="绛涢€夋枃浠?.." data-code-search>
+                    <input type="search" placeholder="Filter files..." data-code-search>
                     <select data-code-filter aria-label="File type filter">
                         <option value="all">All</option>
                         <option value="html">HTML</option>
@@ -9476,6 +11292,7 @@ console.log('Droi generated game:', GAME_TITLE);`
             savedAt: new Date().toISOString(),
             numericValues: state.numericValues || {},
             pendingRuntimePatches: state.pendingRuntimePatches || [],
+            editEnvelopes: state.editEnvelopes || [],
             toolArtifacts: (state.toolArtifacts || []).map(artifact => ({
                 toolId: artifact.toolId,
                 artifactType: artifact.artifactType,
@@ -9559,6 +11376,9 @@ console.log('Droi generated game:', GAME_TITLE);`
             trustLevel: 'local_draft',
             history: collectWorkspaceHistoryRecords(workspace)
         };
+        if (project && project.projectMeta) {
+            upsert('project-meta.json', JSON.stringify(stripSensitiveWorkspaceKeys(project.projectMeta), null, 2));
+        }
         upsert('workspace-session.json', JSON.stringify(sessionExport, null, 2));
         upsert('workspace-ui-state.json', JSON.stringify(stripSensitiveWorkspaceKeys(uiStateExport), null, 2));
         upsert('workspace-draft.json', JSON.stringify(stripSensitiveWorkspaceKeys(draftExport), null, 2));
@@ -9754,7 +11574,7 @@ console.log('Droi generated game:', GAME_TITLE);`
             previewUrl: plan && plan.generatedProject && plan.generatedProject.previewUrl ? resolvePreviewUrl(plan.generatedProject.previewUrl) : '',
             assetManifest: plan && plan.generatedProject ? (plan.generatedProject.assetManifest || plan.generatedProject.assetSidebar || null) : null,
             gameSpec: plan ? plan.generatedSpec : null,
-            selectedTarget: { itemId: workspace && workspace.__selectedItemId || 'combat.enemySpeed', title: 'Current workspace target' },
+            selectedTarget: { itemId: workspace && workspace.__selectedItemId || 'project.overall', title: 'Current workspace target' },
             toolHints: { preferredToolId: toolId, returnTo: 'droi-workspace' },
             toolArtifacts: workspace && workspace.__state ? workspace.__state.toolArtifacts : []
         };
@@ -9852,15 +11672,8 @@ console.log('Droi generated game:', GAME_TITLE);`
 
     function buildGameEditSidebarHtml(project = null, generated = null) {
         return `
-            <div class="tools-topbar" aria-label="Tool actions">
-                <span class="tools-save-indicator" data-workspace-save-status>Changes saved</span>
-                <button type="button" class="tools-publish-btn" title="Publish is not enabled in this local demo">Publish</button>
-                <button type="button" class="tools-save-btn" data-workspace-save>Save ZIP</button>
-            </div>
             <div class="game-edit-tabs" role="tablist" aria-label="Game edit modules">
-                ${GAME_EDIT_MODULES.map(module => `
-                    <button type="button" class="game-edit-tab${module.id === 'stats' ? ' active' : ''}${module.id !== 'stats' ? ' advanced-only' : ''}" data-edit-module-tab="${escapeHtml(module.id)}">${escapeHtml(module.id === 'stats' ? 'Home' : module.id === 'tools' ? 'Tools' : module.label)}<small>${module.id === 'stats' ? Object.keys(WORKSPACE_NUMERIC_SETTINGS).length : (module.id === 'media' ? WORKSPACE_MEDIA_STRUCTURE.length : (module.id === 'tools' ? DROI_GAME_TOOLS.length : buildWorkspaceCodeFiles(project, generated, null).length))}</small></button>
-                `).join('')}
+                ${GAME_EDIT_MODULES.map(module => buildWorkspaceModuleTabHtml(module, project, generated)).join('')}
             </div>
             <div class="workspace-advanced-lock-hint" data-advanced-lock-hint hidden>Switch to Advanced to inspect assets, files, and local tools.</div>
             ${GAME_EDIT_MODULES.map(module => `
@@ -9871,7 +11684,7 @@ console.log('Droi generated game:', GAME_TITLE);`
                             ? buildDroiGameToolsHtml()
                             : module.id === 'media'
                                 ? buildWorkspaceMediaPanelHtml(project, {})
-                                : buildWorkspaceNumericPanelHtml()}
+                                : buildWorkspaceNumericPanelHtml(project)}
                 </div>
             `).join('')}
             <div class="workspace-sidebar-mode-panel" data-workspace-sidebar-mode>
@@ -9903,7 +11716,7 @@ console.log('Droi generated game:', GAME_TITLE);`
             <div class="production-assets-sidebar" data-production-assets>
                 <div class="production-sidebar-summary">
                     <strong>Production Assets</strong>
-                    <small>${escapeHtml(project.templateLabel || 'AI direct project')} 路 ${escapeHtml(project.validationReport && project.validationReport.ok ? 'Validated' : 'Needs review')}</small>
+                    <small>${escapeHtml(project.templateLabel || 'AI direct project')} · ${escapeHtml(project.validationReport && project.validationReport.ok ? 'Validated' : 'Needs review')}</small>
                 </div>
                 ${groups.map(group => {
                     const categories = group.categories || [];
@@ -9913,7 +11726,7 @@ console.log('Droi generated game:', GAME_TITLE);`
                             <div class="asset-group-title"><span>${escapeHtml(group.group)}</span><small>${categories.reduce((sum, category) => sum + (category.total || 0), 0)}</small></div>
                             ${categories.map(category => `
                                 <details class="asset-category" ${category.defaultOpen ? 'open' : ''}>
-                                    <summary><span>${escapeHtml(category.category)}</span><small>${category.total}${category.overflow ? ` 路 +${category.overflow}` : ''}</small></summary>
+                                    <summary><span>${escapeHtml(category.category)}</span><small>${category.total}${category.overflow ? ` · +${category.overflow}` : ''}</small></summary>
                                     <div class="asset-node-list">
                                         ${(category.items || []).map(item => `
                                             <button type="button" class="asset-node" data-asset-node>
@@ -9933,7 +11746,7 @@ console.log('Droi generated game:', GAME_TITLE);`
                 }).join('')}
                 <div class="production-validation">
                     <strong>Validation</strong>
-                    ${((project.validationReport && project.validationReport.checks) || []).map(check => `<span class="${check.ok ? 'ok' : 'warn'}">${check.ok ? 'OK' : 'Review'} 路 ${escapeHtml(check.label)}</span>`).join('')}
+                    ${((project.validationReport && project.validationReport.checks) || []).map(check => `<span class="${check.ok ? 'ok' : 'warn'}">${check.ok ? 'OK' : 'Review'} · ${escapeHtml(check.label)}</span>`).join('')}
                 </div>
             </div>
         `;
@@ -10003,59 +11816,184 @@ console.log('Droi generated game:', GAME_TITLE);`
             : { label: '16/9', css: '16 / 9' };
     }
 
+    function buildProjectInfoDropdownHtml(project = null, generated = {}, previewUrl = '') {
+        const projectMeta = (project && project.projectMeta) || normalizeProjectMeta(project || {}, generated || {}, previewUrl);
+        const coverImage = projectMeta.coverImage && typeof projectMeta.coverImage === 'object' ? projectMeta.coverImage : {};
+        const coverUrl = coverImage.url || '';
+        const coverStatus = coverImage.status || 'preview_screenshot_pending';
+        return [
+            '<div class="project-info-dropdown" data-project-info-panel data-project-meta hidden>',
+            '<div class="project-info-head">',
+            '<strong>Project Info</strong>',
+            '<button type="button" data-project-info-close aria-label="Close project info">Close</button>',
+            '</div>',
+            '<div class="project-info-grid">',
+            '<div class="project-info-cover project-cover" data-project-cover>',
+            coverUrl
+                ? `<img src="${escapeHtml(coverUrl)}" alt="${escapeHtml(projectMeta.title)} Preview Image">`
+                : `<div class="project-cover-fallback"><span>Preview Image</span><small>${escapeHtml(coverStatus.replace(/_/g, ' '))}</small></div>`,
+            '</div>',
+            '<label class="project-info-field"><span>Project Name</span><input type="text" data-project-info-input="title" value="' + escapeHtml(projectMeta.projectName || projectMeta.title) + '"></label>',
+            '<label class="project-info-field project-info-description"><span>English Description</span><textarea data-project-info-input="description">' + escapeHtml(projectMeta.englishDescription || projectMeta.description) + '</textarea></label>',
+            '<div class="project-info-actions">',
+            '<button type="button" data-project-info-save disabled>Save project info</button>',
+            '<small data-project-info-status>Project info saved</small>',
+            '</div>',
+            '</div>',
+            '</div>'
+        ].join('');
+    }
+
+    function ensureWorkspaceHeaderActions(workspace) {
+        if (!workspace) return;
+        const topbar = workspace.querySelector('.generated-workspace-topbar, .workspace-topbar');
+        if (!topbar) return;
+        let actions = topbar.querySelector('.workspace-header-actions, .workspace-topbar-actions');
+        if (!actions) {
+            actions = document.createElement('div');
+            actions.className = 'workspace-header-actions workspace-topbar-actions';
+            topbar.appendChild(actions);
+        }
+        if (!actions.querySelector('[data-workspace-save-status]')) {
+            const status = document.createElement('span');
+            status.className = 'workspace-save-state';
+            status.dataset.workspaceSaveStatus = '';
+            status.textContent = 'Changes saved';
+            actions.prepend(status);
+        }
+        const buttons = Array.from(actions.querySelectorAll('button'));
+        const exportButton = buttons.find(button => /share|export|save\s*zip/i.test(button.textContent || ''));
+        if (exportButton) {
+            exportButton.dataset.workspaceSave = '';
+            exportButton.dataset.workspaceShareMenuToggle = '';
+            exportButton.setAttribute('aria-expanded', exportButton.getAttribute('aria-expanded') || 'false');
+        } else if (!actions.querySelector('[data-workspace-save]')) {
+            const wrapper = document.createElement('div');
+            wrapper.className = 'workspace-share-export';
+            wrapper.dataset.workspaceShareExport = '';
+            const button = document.createElement('button');
+            button.type = 'button';
+            button.className = 'workspace-header-btn';
+            button.dataset.workspaceSave = '';
+            button.dataset.workspaceShareMenuToggle = '';
+            button.setAttribute('aria-expanded', 'false');
+            button.textContent = 'Share / Export';
+            const menu = document.createElement('div');
+            menu.className = 'workspace-share-menu';
+            menu.dataset.workspaceShareMenu = '';
+            menu.hidden = true;
+            menu.innerHTML = '<button type="button" data-workspace-export-zip>Export ZIP</button><button type="button" data-workspace-copy-link disabled title="Publish first to copy a public link.">Copy link</button>';
+            wrapper.append(button, menu);
+            actions.appendChild(wrapper);
+        }
+        const publishButton = buttons.find(button => /^publish$/i.test((button.textContent || '').trim()));
+        if (publishButton) {
+            publishButton.dataset.workspacePublish = '';
+            publishButton.disabled = true;
+            publishButton.title = publishButton.title || 'Complete project info and playable preview verification before publishing.';
+        } else if (!actions.querySelector('[data-workspace-publish]')) {
+            const button = document.createElement('button');
+            button.type = 'button';
+            button.className = 'workspace-header-btn';
+            button.dataset.workspacePublish = '';
+            button.disabled = true;
+            button.title = 'Complete project info and playable preview verification before publishing.';
+            button.textContent = 'Publish';
+            actions.appendChild(button);
+        }
+        const saveChangesButton = buttons.find(button => /save changes|save info/i.test(button.textContent || ''));
+        if (saveChangesButton) {
+            saveChangesButton.dataset.workspaceSaveState = '';
+            saveChangesButton.disabled = true;
+            saveChangesButton.textContent = 'Save Info';
+        } else if (!actions.querySelector('[data-workspace-save-state]')) {
+            const button = document.createElement('button');
+            button.type = 'button';
+            button.className = 'workspace-header-btn workspace-save-changes-btn';
+            button.dataset.workspaceSaveState = '';
+            button.disabled = true;
+            button.textContent = 'Save Info';
+            actions.appendChild(button);
+        }
+    }
+
     function buildGeneratedEditWorkspaceHtml(generated, project = null) {
         const previewUrl = project && project.previewUrl ? resolvePreviewUrl(project.previewUrl) : '';
+        const projectMeta = (project && project.projectMeta) || normalizeProjectMeta(project || {}, generated || {}, previewUrl);
         const previewLayout = resolveGeneratedPreviewLayout(generated);
         const previewAspect = resolveGeneratedPreviewAspect(generated, previewLayout);
         const previewStyle = `--preview-aspect: ${previewAspect.css};`;
-        const previewAttributes = `data-preview-layout="${escapeHtml(previewLayout)}" data-preview-aspect="${escapeHtml(previewAspect.label)}" style="${escapeHtml(previewStyle)}"`;
+        const aspectParts = String(previewAspect.css || '').split('/').map(part => Number(part.trim()));
+        const previewOrientation = aspectParts.length === 2 && aspectParts[0] > 0 && aspectParts[1] > 0 && aspectParts[0] < aspectParts[1]
+            ? 'portrait'
+            : previewLayout;
+        const previewAttributes = `data-preview-layout="${escapeHtml(previewLayout)}" data-preview-aspect="${escapeHtml(previewAspect.label)}" data-preview-orientation="${escapeHtml(previewOrientation)}" style="${escapeHtml(previewStyle)}"`;
+        const sourceEvidence = workspaceProjectModeLabel(project || {});
         const previewMarkup = previewUrl
-            ? `<iframe class="template-preview-frame" src="${escapeHtml(previewUrl)}" title="${escapeHtml(generated.meta.gameName)} playable AI direct preview" loading="lazy"></iframe>`
+            ? `<iframe class="template-preview-frame" src="${escapeHtml(previewUrl)}" title="${escapeHtml(projectMeta.title)} playable AI direct preview" loading="lazy"></iframe>`
             : '<canvas class="game-preview-canvas" width="640" height="360" tabindex="0" aria-label="Playable generated game preview"></canvas>';
         return [
-            `<div class="generated-game-page is-beginner-mode" data-game-workspace data-workspace-mode="beginner" data-generated-view="preview" ${previewAttributes}>`,
+            `<div class="generated-game-page generated-workspace-pc is-beginner-mode" data-game-workspace data-workspace-mode="beginner" data-generated-view="preview" ${previewAttributes}>`,
+            '<header class="generated-workspace-topbar workspace-topbar" aria-label="Workspace actions">',
+            '<div class="workspace-topbar-brand">',
+            '<button type="button" class="workspace-close-btn" data-workspace-close aria-label="Close workspace">Close</button>',
+            '<strong>Gamia Ai platform</strong>',
+            '</div>',
+            '<div class="workspace-title-block workspace-topbar-title">',
+            '<button type="button" class="workspace-title-project-button" data-project-info-toggle aria-expanded="false">',
+            '<small>GAME WORKSPACE</small>',
+            `<strong data-generated-game-title>${escapeHtml(projectMeta.title)}</strong>`,
+            `<span class="workspace-artifact-status"><b>Playable v1</b><i data-workspace-source-evidence>${escapeHtml(sourceEvidence)}</i></span>`,
+            '</button>',
+            buildProjectInfoDropdownHtml(project, generated, previewUrl),
+            '</div>',
+            '<div class="workspace-header-actions workspace-topbar-actions">',
+            '<span class="workspace-save-state" data-workspace-save-status>Changes saved</span>',
+            '<button type="button" class="workspace-header-btn workspace-undo-btn" data-workspace-undo disabled title="No earlier workspace action to undo yet.">Undo</button>',
+            '<button type="button" class="workspace-header-btn workspace-redo-btn" data-workspace-redo disabled title="Nothing to redo yet.">Redo</button>',
+            '<div class="workspace-share-export" data-workspace-share-export>',
+            '<button type="button" class="workspace-header-btn" data-workspace-save data-workspace-share-menu-toggle aria-expanded="false">Share / Export</button>',
+            '<div class="workspace-share-menu" data-workspace-share-menu hidden>',
+            '<button type="button" data-workspace-export-zip>Export ZIP</button>',
+            '<button type="button" data-workspace-copy-link disabled title="Publish first to copy a public link.">Copy link</button>',
+            '</div>',
+            '</div>',
+            '<button type="button" class="workspace-header-btn" data-workspace-publish disabled title="Complete project info and playable preview verification before publishing.">Publish</button>',
+            '<button type="button" class="workspace-header-btn workspace-save-changes-btn" data-workspace-save-state disabled>Save Info</button>',
+            '</div>',
+            '</header>',
             '<div class="workspace-body generated-page-layout page-workbench" aria-label="Generated game page workbench">',
             '<aside class="change-history-sidebar version-history-panel page-region" aria-label="Version history">',
             '<button type="button" class="workspace-panel-toggle workspace-panel-toggle-left" data-workspace-panel-toggle="history" aria-label="Toggle change history" aria-expanded="false">&lsaquo;</button>',
             '<div class="workspace-panel-head">',
-            '<span>Version History</span>',
-            '<small>Page-level changes, exports and reusable prompts.</small>',
+            '<span>History</span>',
+            '<small>Page-level changes and recoverable versions.</small>',
             '</div>',
             '<div class="change-history-list" data-edit-history-list>',
             `<button type="button" class="change-history-record initial-version" data-history-prompt="${escapeHtml(generated.meta.description || 'Initial generated version')}">`,
             '<span class="change-record-top"><strong><em>v1</em>Initial generation</strong><small>System</small></span>',
-            `<span class="change-record-prompt">${escapeHtml(generated.meta.gameName)}</span>`,
-            '<span class="change-record-meta">Playable base version generated. Beginner mode is ready for numeric tuning; Advanced mode unlocks media, files and tools.</span>',
+            '<span class="change-record-meta">Initial playable game generated from your prompt.</span>',
             '</button>',
             '</div>',
             '</aside>',
-            '<main class="game-preview-column generated-main-panel game-workspace-panel" aria-label="Playable game workspace">',
-            '<div class="generated-main-header">',
-            '<div class="workspace-title-block">',
-            '<small>GAME WORKSPACE</small>',
-            `<strong data-generated-game-title>${escapeHtml(generated.meta.gameName)}</strong>`,
-            '<span class="workspace-artifact-status"><b>Playable v1</b><i>Ready for conversational edits</i></span>',
-            '</div>',
-            '<div class="workspace-header-actions">',
-            '<button type="button" class="workspace-header-btn" data-workspace-save>Save ZIP</button>',
-            '<span class="workspace-save-state" data-workspace-save-status>Changes saved</span>',
-            '</div>',
-            '<div class="generated-view-switch" role="tablist" aria-label="Generated game view">',
+            '<div class="generated-view-switch mobile-generated-view-switch" role="tablist" aria-label="Generated game view">',
             '<button type="button" data-generated-view-set="chat" aria-pressed="false">Chat</button>',
             '<button type="button" class="active" data-generated-view-set="preview" aria-pressed="true">Preview / Play</button>',
             '</div>',
-            '</div>',
-            '<div class="playable-shell generated-view-shell preview-open">',
+            '<main class="playable-shell generated-view-shell preview-open workspace-four-column-shell" aria-label="Playable game workspace">',
             '<button type="button" class="mobile-game-preview-toggle" data-game-action="mobile-preview-toggle" aria-expanded="true">Close game preview</button>',
-            '<section class="generated-chat-view" data-generated-view-panel="chat" aria-label="Generated conversation">',
+            '<section class="generated-chat-view chat-workfeed-column game-workspace-panel page-region" data-generated-view-panel="chat" aria-label="Chat and workfeed">',
+            '<div class="workspace-column-head chat-workfeed-head">',
+            '<span>Chat / Workfeed</span>',
+            `<button type="button" class="workspace-project-chip" data-workspace-project-chip data-project-info-toggle aria-expanded="false">${escapeHtml(projectMeta.title)} <span aria-hidden="true">&#8964;</span></button>`,
+            '</div>',
             '<div class="game-preview-chat-panel" data-preview-chat-panel>',
             '<div class="preview-chat-title-row">',
-            '<strong>Editing thread</strong>',
             '<span aria-hidden="true">v1 playable</span>',
             '</div>',
             '<div class="preview-chat-user-bubble">Ok, create it!</div>',
             `<div class="preview-chat-time">${escapeHtml(new Date().toLocaleTimeString([], { hour: 'numeric', minute: '2-digit' }))}</div>`,
-            `<p class="preview-chat-assistant-note">Created <strong>${escapeHtml(generated.meta.gameName)}</strong>. Play it first, then describe the next edit below. I will route style, balance, controls, assets, or files automatically.</p>`,
+            `<p class="preview-chat-assistant-note">Created <strong>${escapeHtml(projectMeta.title)}</strong>. Play it first, then describe the next edit below. I will route style, balance, controls, assets, or files automatically.</p>`,
             '<div class="workspace-prompt-chips" aria-label="Suggested edit prompts">',
             '<button type="button" class="workspace-prompt-chip" data-workspace-prompt="Make the visual style warmer and more polished, while keeping the same gameplay.">Change art style</button>',
             '<button type="button" class="workspace-prompt-chip" data-workspace-prompt="Tune the difficulty so the first minute feels fair but still exciting.">Tune difficulty</button>',
@@ -10065,13 +12003,16 @@ console.log('Droi generated game:', GAME_TITLE);`
             '<div class="preview-chat-edit-status" data-workspace-edit-context><strong>Ready for edits:</strong> Describe the change in the input below. <small>Open Tools only when you need a precise target.</small></div>',
             '</div>',
             '</section>',
-            '<section class="generated-preview-view playable-preview-card" data-generated-view-panel="preview" aria-label="Playable preview">',
+            '<section class="generated-preview-view preview-play-column playable-preview-card game-preview-column page-region" data-generated-view-panel="preview" aria-label="Preview and play">',
+            '<div class="workspace-column-head preview-play-head">',
+            '<span>Preview / Play</span>',
+            `<small><span data-preview-status>Rendering</span><i data-workspace-source-evidence>${escapeHtml(sourceEvidence)}</i></small>`,
+            '</div>',
             '<div class="workspace-stage-toolbar">',
-            '<div class="workspace-stage-label"><span>Playable stage</span><strong>Start screen ready</strong></div>',
+            `<div class="workspace-stage-label"><span>Preview</span><strong>${escapeHtml(projectMeta.title)}</strong></div>`,
             '<div class="game-preview-actions preview-card-actions" aria-label="Playable controls">',
-            '<button type="button" class="game-preview-btn game-preview-btn-primary" data-game-action="pause">Start / Focus</button>',
+            '<button type="button" class="game-preview-btn game-preview-btn-primary" data-game-action="pause">Start</button>',
             '<button type="button" class="game-preview-btn" data-game-action="restart">Restart</button>',
-            '<button type="button" class="game-preview-btn" data-generated-view-set="chat">Edit</button>',
             `<button type="button" class="game-preview-btn web-preview-trigger" data-game-action="preview" data-preview-url="${escapeHtml(previewUrl)}">Open</button>`,
             '</div>',
             '</div>',
@@ -10079,8 +12020,12 @@ console.log('Droi generated game:', GAME_TITLE);`
             previewMarkup,
             '</div>',
             '<div class="preview-layout-diagnostic" data-preview-layout-diagnostic hidden></div>',
-            '</section>',
+            '<div class="preview-repair-actions" data-preview-repair-actions hidden>',
+            '<button type="button" class="game-preview-btn" data-preview-repair-action="repair">Repair preview</button>',
+            '<button type="button" class="game-preview-btn" data-preview-repair-action="regenerate">Regenerate</button>',
+            '<button type="button" class="game-preview-btn" data-preview-repair-action="revert">Revert to last playable</button>',
             '</div>',
+            '</section>',
             '</main>',
             '<aside class="game-edit-sidebar edit-tools-panel page-region" aria-label="Edit tools and project resources">',
             '<button type="button" class="workspace-panel-toggle workspace-panel-toggle-right" data-workspace-panel-toggle="edit" aria-label="Toggle game edit sidebar" aria-expanded="false">&rsaquo;</button>',
@@ -10140,7 +12085,7 @@ console.log('Droi generated game:', GAME_TITLE);`
                 ? `<div class="summary-item"><strong>Validation report:</strong> ${escapeHtml(project.validationReport.ok ? 'Passed' : 'Needs review')}</div>`
                 : '',
             checks.length
-                ? `<div class="summary-item validation-inline">${checks.map(check => `<span class="${check.ok ? 'ok' : 'warn'}">${check.ok ? 'OK' : 'Review'} 路 ${escapeHtml(check.label)}</span>`).join('')}</div>`
+                ? `<div class="summary-item validation-inline">${checks.map(check => `<span class="${check.ok ? 'ok' : 'warn'}">${check.ok ? 'OK' : 'Review'} · ${escapeHtml(check.label)}</span>`).join('')}</div>`
                 : '',
             '</div>'
         ].join('');
@@ -10153,6 +12098,9 @@ console.log('Droi generated game:', GAME_TITLE);`
             ? plan.aiDirectGeneration.modelMeta
             : (analysisState.finalModelMeta || analysisState.analysisModelMeta || null);
         const modelLabel = modelMetaDisplay(generationModel);
+        const generationModeLabel = plan.generationMode === 'template_assisted'
+            ? 'Template assisted'
+            : t('autoPath');
         const generated = plan.generatedSpec;
         if (!generated) {
             return [
@@ -10164,7 +12112,7 @@ console.log('Droi generated game:', GAME_TITLE);`
         }
         return [
             '<div class="generation-result">',
-            `<div class="generation-status">${escapeHtml(t('autoPath'))}</div>`,
+            `<div class="generation-status">${escapeHtml(generationModeLabel)}</div>`,
             `<div class="generation-title">${escapeHtml(t('gameSpecReady'))}</div>`,
             `<div class="generation-meta"><span>${escapeHtml(decision.templateLabel)}</span><span>${Math.round(decision.confidence * 100)}% match</span>${modelLabel ? `<span>AI: ${escapeHtml(modelLabel)}</span>` : ''}</div>`,
             buildAiPipelineSummaryHtml(plan, project),
@@ -10175,8 +12123,8 @@ console.log('Droi generated game:', GAME_TITLE);`
         ].join('');
     }
 
-    function showAutoGenerationResult(plan) {
-        addBotMessage(buildGeneratedSpecHtml(plan), msgDiv => {
+    function showAutoGenerationResult(plan, options = {}) {
+        return addBotMessage(buildGeneratedSpecHtml(plan), msgDiv => {
             msgDiv.classList.add('has-game-workspace');
             const inputArea = document.querySelector('.chat-input-wrapper');
             if (inputArea) inputArea.style.display = '';
@@ -10186,6 +12134,7 @@ console.log('Droi generated game:', GAME_TITLE);`
             const workspace = msgDiv.querySelector('[data-game-workspace]');
             if (workspace) persistWorkspaceSnapshot(workspace, plan, 'generation_complete');
             scrollChatMessageIntoReadableView(msgDiv, 'start');
+            if (typeof options.onMounted === 'function') options.onMounted(msgDiv, workspace);
         });
     }
 
@@ -10209,22 +12158,139 @@ console.log('Droi generated game:', GAME_TITLE);`
     function inferWorkspaceEditTargetFromPrompt(prompt, fallbackItemId = '') {
         if (!prompt) return fallbackItemId || 'visual.mapMain';
         if (promptIncludesAny(prompt, [
-            '缇庢湳', '瑙嗚', '鐢婚', '椋庢牸', '閰嶈壊', '鑹插僵', '棰滆壊', '鑳屾櫙', '鍦板浘', '鍦烘櫙', '鍔ㄦ．', '鍙埍', '鍦嗘鼎',
             'art style', 'visual style', 'visual', 'style', 'theme', 'palette', 'color', 'background', 'map', 'scene',
             'animal island', 'cozy', 'cute', 'watercolor', 'pixel', 'gothic', 'cyber', 'neon'
         ])) return 'visual.mapMain';
-        if (promptIncludesAny(prompt, ['鐜╁', '涓昏', '椋炶埞', '瑙掕壊', 'player', 'ship', 'fighter', 'character', 'glider'])) return 'art.player';
+        if (promptIncludesAny(prompt, ['player', 'ship', 'fighter', 'character', 'glider'])) return 'art.player';
         if (promptIncludesAny(prompt, ['enemy', 'enemies', 'mob', 'foe', 'creep', 'hostile'])) return 'art.enemies';
-        if (promptIncludesAny(prompt, ['boss', 'bosses', '棣栭'])) return 'art.bosses';
-        if (promptIncludesAny(prompt, ['瀛愬脊', '寮瑰箷', '鏀诲嚮鐗规晥', 'bullet', 'projectile', 'shot', 'attack art'])) return 'art.weaponAttacks';
-        if (promptIncludesAny(prompt, ['ui', 'hud', '鎸夐挳', '鐣岄潰', '鑿滃崟', 'panel', 'button'])) return 'visual.ui';
-        if (promptIncludesAny(prompt, ['闊虫晥', '闊充箰', '澹伴煶', 'audio', 'sound', 'music', 'bgm'])) return 'audio.effects';
+        if (promptIncludesAny(prompt, ['boss', 'bosses'])) return 'art.bosses';
+        if (promptIncludesAny(prompt, ['bullet', 'projectile', 'shot', 'attack art'])) return 'art.weaponAttacks';
+        if (promptIncludesAny(prompt, ['ui', 'hud', 'panel', 'button'])) return 'visual.ui';
+        if (promptIncludesAny(prompt, ['audio', 'sound', 'music', 'bgm'])) return 'audio.effects';
         if (promptIncludesAny(prompt, ['shooting', 'attack speed', 'fire rate', 'cooldown'])) return 'combat.fireRate';
-        if (promptIncludesAny(prompt, ['浼ゅ', 'damage', 'power'])) return 'combat.damage';
+        if (promptIncludesAny(prompt, ['damage', 'power'])) return 'combat.damage';
         if (promptIncludesAny(prompt, ['hp', 'health', 'life', 'enemy health'])) return 'combat.enemyHp';
-        if (promptIncludesAny(prompt, ['閫熷害', 'speed'])) return 'combat.enemySpeed';
-        if (promptIncludesAny(prompt, ['闅惧害', '娉㈡', 'difficulty', 'wave'])) return 'combat.wave';
+        if (promptIncludesAny(prompt, ['speed'])) return 'combat.enemySpeed';
+        if (promptIncludesAny(prompt, ['difficulty', 'wave'])) return 'combat.wave';
         return fallbackItemId || 'visual.mapMain';
+    }
+
+    function mapEditTargetToRegion(item = {}, prompt = '') {
+        const id = String(item.id || '').toLowerCase();
+        const type = String(item.type || '').toLowerCase();
+        const category = String(item.categoryId || item.categoryLabel || '').toLowerCase();
+        const text = `${id} ${type} ${category} ${prompt || ''}`.toLowerCase();
+        if (id === 'project.overall') return 'project/overall';
+        if (type === 'number' || id.startsWith('combat.') || id.startsWith('output.')) return 'spec/tuning';
+        if (type === 'image' || id.startsWith('visual.') || id.startsWith('art.')) return 'assets/visual';
+        if (type === 'audio' || id.startsWith('audio.')) return 'assets/audio-feel';
+        if (id.startsWith('code.') || type === 'code' || /runtime|logic|mechanic|controls|collision/.test(text)) return 'runtime/modules';
+        return 'spec/gameplay';
+    }
+
+    function inferEditLevelHint(item = {}, prompt = '') {
+        const id = String(item.id || '').toLowerCase();
+        const type = String(item.type || '').toLowerCase();
+        const text = `${id} ${type} ${prompt || ''}`.toLowerCase();
+        if (type === 'number' || id.startsWith('combat.') || id.startsWith('output.') || /number|speed|damage|hp|health|rate|cooldown|fps|difficulty/.test(text)) return 'L1';
+        if (type === 'image' || type === 'audio' || id.startsWith('visual.') || id.startsWith('art.') || id.startsWith('audio.')) return 'L2';
+        if (/new asset|generate asset|sprite|soundtrack|music|voice|animation sheet/.test(text)) return 'L3';
+        if (type === 'code' || id.startsWith('code.') || /mechanic|logic|controls|collision|physics|ai behavior|new enemy behavior/.test(text)) return 'L4';
+        return 'fallback_full_project';
+    }
+
+    function buildWorkspaceEditRoute(item = {}, prompt = '') {
+        return {
+            levelHint: inferEditLevelHint(item, prompt),
+            region: mapEditTargetToRegion(item, prompt),
+            ranBackend: true,
+            sourceTrace: {
+                route: 'workspace_ai_direct_edit',
+                targetItemId: item.id || '',
+                targetType: item.type || '',
+                targetCategory: item.categoryLabel || item.categoryId || ''
+            }
+        };
+    }
+
+    function resolveWorkspaceRevision(plan = null) {
+        const project = plan && plan.generatedProject && typeof plan.generatedProject === 'object' ? plan.generatedProject : {};
+        const report = project.generationReport && typeof project.generationReport === 'object' ? project.generationReport : {};
+        return Number(project.revision || report.revision || 1) || 1;
+    }
+
+    function buildWorkspaceEditEnvelope(workspace, plan, options = {}) {
+        const item = options.item || {};
+        const route = options.route || buildWorkspaceEditRoute(item, options.prompt || '');
+        const identity = ensureWorkspaceIdentity(workspace, plan || workspace.__plan || workspace.__generationPlan);
+        return stripSensitiveWorkspaceKeys({
+            schema: 'droi-region-patch-envelope/v1',
+            source: options.source || 'ai',
+            status: options.status || 'draft',
+            levelHint: options.levelHint || route.levelHint || 'fallback_full_project',
+            region: options.region || route.region || 'spec/gameplay',
+            prompt: options.prompt || '',
+            target: {
+                itemId: item.id || options.itemId || '',
+                type: item.type || options.type || '',
+                title: item.title || options.title || '',
+                category: item.categoryLabel || item.categoryId || options.category || ''
+            },
+            op: options.op || (options.source === 'manual' ? 'set_value' : 'ai_edit_project'),
+            payload: options.payload || {},
+            baseRevision: resolveWorkspaceRevision(plan || workspace.__plan || workspace.__generationPlan),
+            workspaceId: identity.workspaceId,
+            projectId: identity.projectId,
+            createdAt: new Date().toISOString(),
+            sourceTrace: route.sourceTrace || {}
+        });
+    }
+
+    function queueLocalDraftEnvelope(workspace, envelope) {
+        if (!workspace || !envelope) return null;
+        const state = getWorkspaceState(workspace);
+        if (!Array.isArray(state.editEnvelopes)) state.editEnvelopes = [];
+        const existingIndex = state.editEnvelopes.findIndex(item =>
+            item && item.source === 'manual' && item.region === envelope.region && item.target && envelope.target && item.target.itemId === envelope.target.itemId
+        );
+        if (existingIndex >= 0) {
+            state.editEnvelopes[existingIndex] = {
+                ...state.editEnvelopes[existingIndex],
+                ...envelope,
+                updatedAt: new Date().toISOString()
+            };
+            return state.editEnvelopes[existingIndex];
+        }
+        state.editEnvelopes.push(envelope);
+        return envelope;
+    }
+
+    async function submitWorkspaceEdit(workspace, plan, envelope, submitter = null) {
+        if (!workspace || !envelope) return null;
+        const state = getWorkspaceState(workspace);
+        if (!Array.isArray(state.editEnvelopes)) state.editEnvelopes = [];
+        const nextEnvelope = {
+            ...envelope,
+            submittedAt: new Date().toISOString()
+        };
+        if (nextEnvelope.source === 'manual') {
+            return queueLocalDraftEnvelope(workspace, nextEnvelope);
+        }
+        state.editEnvelopes.push({
+            ...nextEnvelope,
+            status: 'submitted'
+        });
+        recordDiagnostic('workspace-edit-envelope', {
+            source: nextEnvelope.source,
+            level: nextEnvelope.levelHint,
+            region: nextEnvelope.region,
+            op: nextEnvelope.op,
+            projectId: nextEnvelope.projectId || ''
+        });
+        if (typeof submitter === 'function') {
+            return submitter(nextEnvelope);
+        }
+        return nextEnvelope;
     }
 
     function workspaceEditSummaryForItem(item, prompt) {
@@ -10384,6 +12450,7 @@ console.log('Droi generated game:', GAME_TITLE);`
         return current;
     }
     function createWorkspaceHistoryButton(workspace, record) {
+        const summary = compactWorkspaceHistorySummary(record);
         const button = document.createElement('button');
         button.type = 'button';
         button.className = `change-history-record${record.initial ? ' initial-version' : ''}`;
@@ -10395,8 +12462,7 @@ console.log('Droi generated game:', GAME_TITLE);`
                 <strong><em>${escapeHtml(record.version || 'v1')}</em>${escapeHtml(record.title || 'Workspace change')}</strong>
                 <small>${escapeHtml(record.category || 'Local')}</small>
             </span>
-            <span class="change-record-prompt">${escapeHtml(record.prompt || '')}</span>
-            <span class="change-record-meta">${escapeHtml(record.summary || '')}</span>
+            <span class="change-record-meta">${escapeHtml(summary)}</span>
         `;
         button.addEventListener('click', () => {
             const input = chatInputField;
@@ -10416,7 +12482,7 @@ console.log('Droi generated game:', GAME_TITLE);`
             title: record.title || 'Workspace change',
             category: record.category || 'Local',
             prompt: record.prompt || '',
-            summary: record.summary || '',
+            summary: compactWorkspaceHistorySummary(record),
             trustLevel: record.trustLevel || 'local_draft',
             createdAt: record.createdAt || new Date().toISOString(),
             initial: record.initial || record.version === 'v1'
@@ -10443,8 +12509,8 @@ console.log('Droi generated game:', GAME_TITLE);`
             version: versionLabel,
             title: record.title || 'Workspace change',
             category: record.category || 'Local',
-            prompt: record.prompt || '',
-            summary: record.summary || '',
+            prompt: redactSensitiveText(record.prompt || ''),
+            summary: compactWorkspaceHistorySummary(record),
             trustLevel: record.trustLevel || 'local_draft',
             createdAt: record.createdAt || new Date().toISOString()
         };
@@ -10458,34 +12524,38 @@ console.log('Droi generated game:', GAME_TITLE);`
         const panel = workspace.querySelector('[data-preview-chat-panel]');
         const status = panel ? panel.querySelector('[data-workspace-edit-context]') : null;
         if (!panel || !record) return;
-        const userBubble = document.createElement('div');
-        userBubble.className = 'preview-chat-user-bubble';
-        userBubble.textContent = record.prompt;
-        const time = document.createElement('div');
-        time.className = 'preview-chat-time';
-        time.textContent = new Date().toLocaleTimeString([], { hour: 'numeric', minute: '2-digit' });
+        if (!hasRecentPreviewUserPrompt(workspace, record.prompt)) {
+            addPreviewChatUserBubble(workspace, record.prompt);
+        }
         const response = document.createElement('p');
         response.className = 'preview-chat-assistant-note';
         response.innerHTML = `<strong>${escapeHtml(record.title)}</strong> updated. ${escapeHtml(record.summary)}`;
         if (status) {
-            panel.insertBefore(userBubble, status);
-            panel.insertBefore(time, status);
             panel.insertBefore(response, status);
         } else {
-            panel.appendChild(userBubble);
-            panel.appendChild(time);
             panel.appendChild(response);
         }
         panel.scrollTop = panel.scrollHeight;
     }
 
+    function hasRecentPreviewUserPrompt(workspace, prompt) {
+        const panel = workspace.querySelector('[data-preview-chat-panel]');
+        const normalizedPrompt = redactSensitiveText(prompt || '').trim();
+        if (!panel || !normalizedPrompt) return false;
+        const bubbles = Array.from(panel.querySelectorAll('.preview-chat-user-bubble'));
+        const recent = bubbles.slice(-3);
+        return recent.some(bubble => String(bubble.textContent || '').trim() === normalizedPrompt);
+    }
+
     function addPreviewChatUserBubble(workspace, prompt) {
         const panel = workspace.querySelector('[data-preview-chat-panel]');
         if (!panel || !prompt) return;
+        const safePrompt = redactSensitiveText(prompt);
+        if (hasRecentPreviewUserPrompt(workspace, safePrompt)) return;
         const anchor = panel.querySelector('[data-workspace-edit-context]');
         const userBubble = document.createElement('div');
         userBubble.className = 'preview-chat-user-bubble';
-        userBubble.textContent = prompt;
+        userBubble.textContent = safePrompt;
         const time = document.createElement('div');
         time.className = 'preview-chat-time';
         time.textContent = new Date().toLocaleTimeString([], { hour: 'numeric', minute: '2-digit' });
@@ -10496,6 +12566,7 @@ console.log('Droi generated game:', GAME_TITLE);`
             panel.appendChild(userBubble);
             panel.appendChild(time);
         }
+        panel.scrollTop = panel.scrollHeight;
     }
 
     // Edit receipt (CHAT_REBUILD_PLAN T2.3): snapshot version + structured
@@ -10521,7 +12592,9 @@ console.log('Droi generated game:', GAME_TITLE);`
         }
         const existing = panel.querySelector(`[data-work-status-id="${CSS.escape(options.workStatusId)}"]`);
         if (existing) existing.remove();
-        addPreviewChatUserBubble(workspace, options.prompt);
+        if (!hasRecentPreviewUserPrompt(workspace, options.prompt)) {
+            addPreviewChatUserBubble(workspace, options.prompt);
+        }
         const card = window.DroiChat.renderEditReceipt(receipt, {
             onTryIt: () => {
                 const frame = workspace.querySelector('.template-preview-frame, .game-preview-canvas');
@@ -10570,6 +12643,46 @@ console.log('Droi generated game:', GAME_TITLE);`
             prompt: `Revert to v${version}`,
             summary: `Workspace restored to v${version}.`
         });
+        updateWorkspaceVersionControls(workspace, plan);
+        scheduleWorkspaceSnapshotSave(workspace, plan, 'version_revert');
+    }
+
+    function getWorkspaceVersionNavState(workspace, plan) {
+        if (!window.DroiChat || !window.DroiChat.versions || !workspace) {
+            return { projectKey: '', versions: [], current: 0, currentIndex: -1, canUndo: false, canRedo: false };
+        }
+        const projectKey = workspace.__projectKey || resolveWorkspaceProjectId(plan || workspace.__plan || workspace.__generationPlan);
+        const versions = window.DroiChat.versions.list(projectKey).map(entry => Number(entry.version)).sort((a, b) => a - b);
+        const current = Number(window.DroiChat.versions.currentVersion(projectKey) || 0);
+        const currentIndex = versions.indexOf(current);
+        return {
+            projectKey,
+            versions,
+            current,
+            currentIndex,
+            canUndo: currentIndex > 0,
+            canRedo: currentIndex >= 0 && currentIndex < versions.length - 1
+        };
+    }
+
+    function updateWorkspaceVersionControls(workspace, plan) {
+        const nav = getWorkspaceVersionNavState(workspace, plan);
+        workspace.querySelectorAll('[data-workspace-undo]').forEach(button => {
+            button.disabled = !nav.canUndo;
+            button.title = nav.canUndo ? `Restore v${nav.versions[nav.currentIndex - 1]}` : 'No earlier workspace action to undo yet.';
+        });
+        workspace.querySelectorAll('[data-workspace-redo]').forEach(button => {
+            button.disabled = !nav.canRedo;
+            button.title = nav.canRedo ? `Restore v${nav.versions[nav.currentIndex + 1]}` : 'Nothing to redo yet.';
+        });
+    }
+
+    function stepWorkspaceVersion(workspace, plan, direction) {
+        const nav = getWorkspaceVersionNavState(workspace, plan);
+        const nextIndex = nav.currentIndex + direction;
+        const nextVersion = nav.versions[nextIndex];
+        if (!nextVersion) return;
+        revertWorkspaceToVersion(workspace, plan, nav.projectKey, nextVersion);
     }
 
     function ensureWorkspaceAiWorkStyles() {
@@ -10591,6 +12704,10 @@ console.log('Droi generated game:', GAME_TITLE);`
                 border-color: rgba(34, 197, 94, 0.22);
                 background: linear-gradient(135deg, rgba(34, 197, 94, 0.12), rgba(94, 231, 255, 0.06)), rgba(8, 12, 28, 0.78);
             }
+            .workspace-ai-work-card.failed {
+                border-color: rgba(248, 113, 113, 0.26);
+                background: linear-gradient(135deg, rgba(248, 113, 113, 0.12), rgba(139, 92, 246, 0.07)), rgba(8, 12, 28, 0.8);
+            }
             .workspace-ai-work-head {
                 display: flex;
                 align-items: center;
@@ -10607,9 +12724,19 @@ console.log('Droi generated game:', GAME_TITLE);`
                 font-size: 0.72rem;
                 font-weight: 900;
             }
+            .workspace-ai-work-card.working .workspace-ai-work-head span {
+                color: transparent;
+                border: 2px solid rgba(155, 239, 255, 0.28);
+                border-top-color: #9befef;
+                animation: workspaceAiSpin 0.9s linear infinite, workspaceAiBreathe 1.8s ease-in-out infinite;
+            }
             .workspace-ai-work-card.done .workspace-ai-work-head span {
                 background: rgba(34, 197, 94, 0.16);
                 color: #86efac;
+            }
+            .workspace-ai-work-card.failed .workspace-ai-work-head span {
+                background: rgba(248, 113, 113, 0.16);
+                color: #fecaca;
             }
             .workspace-ai-work-head strong {
                 font-size: 0.78rem;
@@ -10628,6 +12755,48 @@ console.log('Droi generated game:', GAME_TITLE);`
                 gap: 0.28rem;
                 margin: 0;
                 padding-left: 1.15rem;
+            }
+            .workspace-ai-work-card li {
+                display: grid;
+                grid-template-columns: auto minmax(0, 1fr);
+                gap: 0.4rem;
+                align-items: start;
+            }
+            .workspace-ai-step-status {
+                min-width: 1.5rem;
+                color: rgba(155, 239, 255, 0.84);
+                font-weight: 900;
+            }
+            .workspace-ai-step-copy {
+                display: grid;
+                gap: 0.08rem;
+                min-width: 0;
+            }
+            .workspace-ai-step-copy strong,
+            .workspace-ai-step-copy em {
+                color: rgba(241, 245, 249, 0.92);
+                font-style: normal;
+            }
+            .workspace-ai-work-card li[data-status="done"] .workspace-ai-step-status {
+                color: #86efac;
+            }
+            .workspace-ai-work-card li[data-status="running"] .workspace-ai-step-status {
+                color: transparent;
+                width: 0.9rem;
+                min-width: 0.9rem;
+                height: 0.9rem;
+                margin-top: 0.15rem;
+                border: 2px solid rgba(155, 239, 255, 0.22);
+                border-top-color: #9befef;
+                border-radius: 999px;
+                animation: workspaceAiSpin 0.85s linear infinite;
+            }
+            .workspace-ai-work-card li[data-status="queued"] {
+                opacity: 0.66;
+            }
+            .workspace-ai-work-card li[data-status="warning"] .workspace-ai-step-status,
+            .workspace-ai-work-card li[data-status="failed"] .workspace-ai-step-status {
+                color: #facc15;
             }
             .workspace-ai-file-list {
                 display: flex;
@@ -10653,8 +12822,60 @@ console.log('Droi generated game:', GAME_TITLE);`
                 white-space: normal;
                 word-break: break-word;
             }
+            .workspace-intent-card .summary-actions {
+                display: flex;
+                flex-wrap: wrap;
+                gap: 0.42rem;
+                padding-top: 0.18rem;
+            }
+            .workspace-intent-card .chat-action-btn {
+                min-height: 2rem;
+                font-size: 0.68rem;
+                white-space: normal;
+            }
+            @keyframes workspaceAiSpin {
+                to { transform: rotate(360deg); }
+            }
+            @keyframes workspaceAiBreathe {
+                0%, 100% { box-shadow: 0 0 0 0 rgba(94, 231, 255, 0.12), 0 0 12px rgba(94, 231, 255, 0.18); }
+                50% { box-shadow: 0 0 0 5px rgba(94, 231, 255, 0.07), 0 0 20px rgba(94, 231, 255, 0.34); }
+            }
         `;
         document.head.appendChild(style);
+    }
+
+    function normalizeWorkspaceAssistantStep(step, index = 0) {
+        if (typeof step === 'string') {
+            return {
+                label: step,
+                status: index === 0 ? 'running' : 'queued',
+                area: '',
+                summary: ''
+            };
+        }
+        const source = step && typeof step === 'object' ? step : {};
+        return {
+            label: String(source.label || source.title || `Step ${index + 1}`),
+            status: String(source.status || (index === 0 ? 'running' : 'queued')),
+            area: String(source.area || ''),
+            summary: String(source.summary || source.detail || '')
+        };
+    }
+
+    function renderWorkspaceAssistantStep(step, index) {
+        const normalized = normalizeWorkspaceAssistantStep(step, index);
+        const status = normalized.status || 'queued';
+        const icon = status === 'done' ? 'OK' : status === 'failed' || status === 'warning' ? '!' : status === 'skipped' ? '-' : status === 'running' ? '' : '...';
+        return [
+            `<li data-status="${escapeHtml(status)}">`,
+            `<span class="workspace-ai-step-status">${escapeHtml(icon)}</span>`,
+            '<span class="workspace-ai-step-copy">',
+            `<strong>${escapeHtml(normalized.label)}</strong>`,
+            normalized.area ? `<em>${escapeHtml(normalized.area)}</em>` : '',
+            normalized.summary ? `<small>${escapeHtml(normalized.summary)}</small>` : '',
+            '</span>',
+            '</li>'
+        ].join('');
     }
 
     function addWorkspaceAssistantStatus(workspace, options = {}) {
@@ -10663,17 +12884,18 @@ console.log('Droi generated game:', GAME_TITLE);`
         const anchor = panel ? panel.querySelector('[data-workspace-edit-context]') : null;
         if (!panel) return null;
         const card = document.createElement('div');
-        card.className = `workspace-ai-work-card ${options.state === 'done' ? 'done' : 'working'}`;
+        const stateClass = options.state === 'done' ? 'done' : (options.state === 'failed' ? 'failed' : 'working');
+        card.className = `workspace-ai-work-card ${stateClass}`;
         if (options.id) card.dataset.workStatusId = options.id;
         const steps = Array.isArray(options.steps) ? options.steps : [];
         const files = Array.isArray(options.files) ? options.files : [];
         card.innerHTML = [
             '<div class="workspace-ai-work-head">',
-            `<span aria-hidden="true">${options.state === 'done' ? 'OK' : '...'}</span>`,
+            `<span aria-hidden="true">${options.state === 'done' ? 'OK' : (options.state === 'failed' ? '!' : '')}</span>`,
             `<strong>${escapeHtml(options.title || (options.state === 'done' ? 'Changes applied' : 'Working on your change'))}</strong>`,
             '</div>',
             options.body ? `<p>${escapeHtml(options.body)}</p>` : '',
-            steps.length ? `<ol>${steps.map(step => `<li>${escapeHtml(step)}</li>`).join('')}</ol>` : '',
+            steps.length ? `<ol>${steps.map(renderWorkspaceAssistantStep).join('')}</ol>` : '',
             files.length ? [
                 '<div class="workspace-ai-file-list">',
                 '<small>Updated files</small>',
@@ -10719,7 +12941,7 @@ console.log('Droi generated game:', GAME_TITLE);`
     }
 
     function updateNumericControlDisplay(workspace, itemId, value) {
-        const setting = WORKSPACE_NUMERIC_SETTINGS[itemId];
+        const setting = getWorkspaceNumericSettings(workspace)[itemId];
         if (!setting) return;
         const safeValue = clampWorkspaceNumber(value, setting.min, setting.max);
         workspace.querySelectorAll(`[data-numeric-range="${CSS.escape(itemId)}"], [data-numeric-number="${CSS.escape(itemId)}"]`).forEach(input => {
@@ -10733,8 +12955,9 @@ console.log('Droi generated game:', GAME_TITLE);`
     function updateNumericApplyBar(workspace) {
         if (!workspace) return;
         const state = getWorkspaceState(workspace);
+        const numericSettings = getWorkspaceNumericSettings(workspace);
         const dirtyEntries = Object.entries(state.dirtyNumericValues || {}).filter(([itemId, value]) => {
-            const setting = WORKSPACE_NUMERIC_SETTINGS[itemId];
+            const setting = numericSettings[itemId];
             return setting && Number.isFinite(Number(value));
         });
         const count = dirtyEntries.length;
@@ -10745,10 +12968,10 @@ console.log('Droi generated game:', GAME_TITLE);`
         if (summary) {
             summary.textContent = count
                 ? dirtyEntries.slice(0, 2).map(([itemId, value]) => {
-                    const setting = WORKSPACE_NUMERIC_SETTINGS[itemId];
+                    const setting = numericSettings[itemId];
                     return `${setting.label}: ${setting.format(value)}`;
                 }).join(' · ') + (count > 2 ? ` · +${count - 2} more` : '')
-                : 'Move sliders or choose presets, then apply once.';
+                : (Object.keys(numericSettings).length ? 'Move sliders or choose presets, then apply once.' : 'No numeric controls are available for this project.');
         }
         if (applyButton) {
             applyButton.disabled = !count;
@@ -10758,7 +12981,7 @@ console.log('Droi generated game:', GAME_TITLE);`
     }
 
     function previewWorkspaceNumericValue(workspace, itemId, value) {
-        const setting = WORKSPACE_NUMERIC_SETTINGS[itemId];
+        const setting = getWorkspaceNumericSettings(workspace)[itemId];
         if (!setting) return;
         const state = getWorkspaceState(workspace);
         const safeValue = clampWorkspaceNumber(value, setting.min, setting.max);
@@ -10790,8 +13013,9 @@ console.log('Droi generated game:', GAME_TITLE);`
 
     function commitWorkspaceNumericChanges(workspace) {
         const state = getWorkspaceState(workspace);
+        const numericSettings = getWorkspaceNumericSettings(workspace);
         const dirtyEntries = Object.entries(state.dirtyNumericValues || {}).filter(([itemId, value]) => {
-            const setting = WORKSPACE_NUMERIC_SETTINGS[itemId];
+            const setting = numericSettings[itemId];
             return setting && Number.isFinite(Number(value));
         });
         if (!dirtyEntries.length) {
@@ -10801,7 +13025,7 @@ console.log('Droi generated game:', GAME_TITLE);`
         const runtime = findWorkspaceRuntime(workspace);
         const summaries = [];
         dirtyEntries.forEach(([itemId, value]) => {
-            const setting = WORKSPACE_NUMERIC_SETTINGS[itemId];
+            const setting = numericSettings[itemId];
             const safeValue = clampWorkspaceNumber(value, setting.min, setting.max);
             const previousValue = Number.isFinite(Number(state.numericDraftBaseValues && state.numericDraftBaseValues[itemId]))
                 ? Number(state.numericDraftBaseValues[itemId])
@@ -10826,6 +13050,27 @@ console.log('Droi generated game:', GAME_TITLE);`
                 if (existing) Object.assign(existing, patch);
                 else state.pendingRuntimePatches.push(patch);
             }
+            const envelope = buildWorkspaceEditEnvelope(workspace, workspace.__plan || workspace.__generationPlan, {
+                source: 'manual',
+                status: 'draft',
+                item: {
+                    id: itemId,
+                    title: setting.label,
+                    type: 'number',
+                    categoryLabel: 'Numeric tuning'
+                },
+                levelHint: 'L1',
+                region: 'spec/tuning',
+                prompt: `Set ${setting.label} to ${setting.format(safeValue)}`,
+                op: 'set_value',
+                payload: {
+                    itemId,
+                    runtimeKey: setting.runtimeKey,
+                    value: safeValue,
+                    previousValue
+                }
+            });
+            submitWorkspaceEdit(workspace, workspace.__plan || workspace.__generationPlan, envelope);
             updateNumericControlDisplay(workspace, itemId, safeValue);
             summaries.push(`${setting.label} ${setting.format(previousValue)} -> ${setting.format(safeValue)}`);
         });
@@ -10834,6 +13079,17 @@ console.log('Droi generated game:', GAME_TITLE);`
             ? 'Applied to the current preview.'
             : 'Recorded. Re-run preview to apply.';
         const summary = `Applied ${summaries.length} numeric change${summaries.length > 1 ? 's' : ''}: ${summaries.join(', ')}. ${runtimeSummary}`;
+        recordDiagnostic('workspace-edit-route', {
+            phase: 'L1 numeric apply',
+            level: 'L1',
+            region: 'spec/tuning',
+            ranBackend: false,
+            sourceTrace: {
+                route: 'workspace_l1_numeric',
+                itemIds: dirtyEntries.map(([itemId]) => itemId),
+                previewApplied: Boolean(runtime && runtime.canDirectApply && runtime.applyEdit)
+            }
+        });
         addWorkspaceHistoryRecord(workspace, {
             title: 'Numeric tuning',
             category: 'Numeric tuning',
@@ -10855,7 +13111,7 @@ console.log('Droi generated game:', GAME_TITLE);`
     }
 
     function resetWorkspaceNumericDraft(workspace, itemId) {
-        const setting = WORKSPACE_NUMERIC_SETTINGS[itemId];
+        const setting = getWorkspaceNumericSettings(workspace)[itemId];
         if (!workspace || !setting) return;
         const state = getWorkspaceState(workspace);
         const baseValue = Number.isFinite(Number(state.numericDraftBaseValues && state.numericDraftBaseValues[itemId]))
@@ -10879,13 +13135,14 @@ console.log('Droi generated game:', GAME_TITLE);`
     }
 
     function bindWorkspaceNumericControls(workspace) {
-        Object.keys(WORKSPACE_NUMERIC_SETTINGS).forEach(itemId => ensureWorkspaceCommittedNumericValue(workspace, itemId));
-        Object.keys(WORKSPACE_NUMERIC_SETTINGS).forEach(itemId => updateNumericControlDisplay(workspace, itemId, workspaceNumericValue(workspace, itemId)));
+        const numericSettings = getWorkspaceNumericSettings(workspace);
+        Object.keys(numericSettings).forEach(itemId => ensureWorkspaceCommittedNumericValue(workspace, itemId));
+        Object.keys(numericSettings).forEach(itemId => updateNumericControlDisplay(workspace, itemId, workspaceNumericValue(workspace, itemId)));
         updateNumericApplyBar(workspace);
         workspace.querySelectorAll('[data-numeric-control]').forEach(card => {
             card.addEventListener('click', () => {
                 const itemId = card.dataset.numericControl;
-                if (!WORKSPACE_NUMERIC_SETTINGS[itemId]) return;
+                if (!numericSettings[itemId]) return;
                 getWorkspaceState(workspace).selectedNumericItemId = itemId;
                 workspace.querySelectorAll('[data-numeric-control]').forEach(candidate => {
                     candidate.classList.toggle('selected', candidate.dataset.numericControl === itemId);
@@ -10906,7 +13163,7 @@ console.log('Droi generated game:', GAME_TITLE);`
         workspace.querySelectorAll('[data-numeric-reset-selected]').forEach(button => {
             button.addEventListener('click', () => {
                 const state = getWorkspaceState(workspace);
-                const itemId = state.selectedNumericItemId || 'combat.enemySpeed';
+                const itemId = state.selectedNumericItemId || Object.keys(getWorkspaceNumericSettings(workspace))[0] || '';
                 resetWorkspaceNumericDraft(workspace, itemId);
             });
         });
@@ -11092,17 +13349,52 @@ console.log('Droi generated game:', GAME_TITLE);`
     }
 
     let activeGameEditSubmitCleanup = null;
+    let activePreviewStageSyncCleanup = null;
+
+    function syncWorkspacePreviewStageSize(workspace) {
+        if (!workspace || !workspace.isConnected) return;
+        const column = workspace.querySelector('.preview-play-column');
+        if (!column) return;
+        const orientation = workspace.dataset.previewOrientation === 'portrait' ? 'portrait' : 'landscape';
+        const columnWidth = Math.max(0, column.getBoundingClientRect().width || 0);
+        const maxWidth = orientation === 'portrait' ? 420 : 720;
+        const stageWidth = Math.max(120, Math.min(maxWidth, Math.max(120, columnWidth - 48)));
+        column.style.setProperty('--preview-stage-width', `${stageWidth}px`, 'important');
+        workspace.querySelectorAll('.workspace-stage-toolbar, .game-preview-viewport, .preview-repair-actions').forEach(node => {
+            node.style.setProperty('box-sizing', 'border-box', 'important');
+            node.style.setProperty('width', `${stageWidth}px`, 'important');
+            node.style.setProperty('min-width', '0', 'important');
+            node.style.setProperty('max-width', `${stageWidth}px`, 'important');
+            node.style.setProperty('margin-left', 'auto', 'important');
+            node.style.setProperty('margin-right', 'auto', 'important');
+            if (node.classList.contains('game-preview-viewport')) {
+                node.style.setProperty('justify-self', 'center', 'important');
+                node.style.setProperty('align-self', 'center', 'important');
+            }
+        });
+    }
 
     function initGameEditWorkspace(container, plan) {
         const workspace = container.querySelector('[data-game-workspace]');
         if (!workspace) return;
         document.body.classList.add('game-edit-workspace-active');
+        if (activePreviewStageSyncCleanup) activePreviewStageSyncCleanup();
+        const syncPreviewStageSoon = () => {
+            syncWorkspacePreviewStageSize(workspace);
+            window.requestAnimationFrame(() => syncWorkspacePreviewStageSize(workspace));
+        };
+        syncPreviewStageSoon();
+        window.addEventListener('resize', syncPreviewStageSoon);
+        activePreviewStageSyncCleanup = () => {
+            window.removeEventListener('resize', syncPreviewStageSoon);
+        };
         const historySidebar = workspace.querySelector('.change-history-sidebar');
         const editSidebar = workspace.querySelector('.game-edit-sidebar');
         workspace.__historySidebar = historySidebar || workspace;
         workspace.__editSidebar = editSidebar || workspace;
         const topbar = container.querySelector('.generated-workspace-topbar');
         const filesCard = container.querySelector('.generated-workspace-files-card');
+        ensureWorkspaceHeaderActions(workspace);
         let auxPanel = null;
         const useLegacyAuxPanel = !workspace.classList.contains('generated-game-page');
         if (useLegacyAuxPanel) {
@@ -11130,7 +13422,7 @@ console.log('Droi generated game:', GAME_TITLE);`
                 auxToggle.setAttribute('aria-expanded', open ? 'true' : 'false');
             });
         } else {
-            if (topbar) topbar.setAttribute('hidden', '');
+            if (topbar && !topbar.closest('[data-game-workspace]')) topbar.setAttribute('hidden', '');
             if (filesCard) filesCard.setAttribute('hidden', '');
         }
         const historyToggle = historySidebar ? historySidebar.querySelector('[data-workspace-panel-toggle="history"]') : null;
@@ -11290,27 +13582,520 @@ console.log('Droi generated game:', GAME_TITLE);`
             if (compactViewSwitch && compactViewSwitch.parentElement) compactViewSwitch.remove();
             document.body.classList.remove('game-edit-workspace-active');
         });
+        const projectInfoPanel = workspace.querySelector('[data-project-info-panel]');
+        const projectInfoToggles = Array.from(workspace.querySelectorAll('[data-project-info-toggle]'));
+        const setProjectInfoOpen = open => {
+            if (!projectInfoPanel) return;
+            projectInfoPanel.hidden = !open;
+            projectInfoToggles.forEach(toggle => toggle.setAttribute('aria-expanded', open ? 'true' : 'false'));
+        };
+        projectInfoToggles.forEach(toggle => {
+            toggle.addEventListener('click', event => {
+                event.preventDefault();
+                event.stopPropagation();
+                setProjectInfoOpen(projectInfoPanel ? projectInfoPanel.hidden : false);
+            });
+        });
+        const projectInfoClose = projectInfoPanel ? projectInfoPanel.querySelector('[data-project-info-close]') : null;
+        if (projectInfoClose) projectInfoClose.addEventListener('click', () => setProjectInfoOpen(false));
+        const onProjectInfoDocumentClick = event => {
+            if (!projectInfoPanel || projectInfoPanel.hidden) return;
+            if (projectInfoPanel.contains(event.target)) return;
+            if (projectInfoToggles.some(toggle => toggle.contains(event.target))) return;
+            setProjectInfoOpen(false);
+        };
+        const onProjectInfoKeydown = event => {
+            if (event.key === 'Escape') setProjectInfoOpen(false);
+        };
+        document.addEventListener('click', onProjectInfoDocumentClick);
+        document.addEventListener('keydown', onProjectInfoKeydown);
+        activeGameCleanups.push(() => {
+            document.removeEventListener('click', onProjectInfoDocumentClick);
+            document.removeEventListener('keydown', onProjectInfoKeydown);
+        });
+        workspace.querySelectorAll('[data-workspace-close]').forEach(button => {
+            button.addEventListener('click', () => {
+                if (activePreviewStageSyncCleanup) {
+                    activePreviewStageSyncCleanup();
+                    activePreviewStageSyncCleanup = null;
+                }
+                resetChat();
+            });
+        });
         const context = workspace.querySelector('[data-workspace-edit-context]');
         const editRoot = workspace.__editSidebar || workspace;
         const modeLabel = workspace.querySelector('[data-workspace-mode-label]');
         workspace.__container = container;
         workspace.__plan = plan;
         workspace.__generationPlan = plan;
+        if (plan && !plan.generatedProject) {
+            const fallbackMeta = normalizeProjectMeta({}, plan.generatedSpec || {}, '');
+            plan.generatedProject = {
+                id: resolveWorkspaceProjectId(plan),
+                projectId: resolveWorkspaceProjectId(plan),
+                generationMode: plan.generationMode || 'workspace_demo',
+                previewUrl: '',
+                codeFiles: [],
+                projectMeta: fallbackMeta,
+                capabilities: { supportsL1: true, supportsL2: false, supportsL3: false, supportsL4: false },
+                validationReport: null,
+                generationReport: { generatedAt: new Date().toISOString(), title: fallbackMeta.title, workspace: 'Droi AI Game Editor' }
+            };
+            syncProjectMetaToGeneratedProject(plan, fallbackMeta);
+        }
+        workspace.__numericSettings = getWorkspaceNumericSettingsForProject(plan && plan.generatedProject);
         const state = getWorkspaceState(workspace);
+        if (!state.selectedNumericItemId) state.selectedNumericItemId = Object.keys(workspace.__numericSettings)[0] || '';
         ensureWorkspaceIdentity(workspace, plan);
         state.__workspace = workspace;
         if (!state.historyRecords.length) state.historyRecords = collectWorkspaceHistoryRecords(workspace);
         let selectedItem = null;
 
-        // Target chip (T2.5): the edit target is visible and overridable BEFORE the request is sent.
-        if (context && context.parentElement && !context.parentElement.querySelector('[data-edit-target-chip]')) {
+        function currentProjectMeta() {
+            const project = plan && plan.generatedProject ? plan.generatedProject : {};
+            return {
+                ...normalizeProjectMeta(project, plan && plan.generatedSpec ? plan.generatedSpec : {}, project.previewUrl || ''),
+                ...(project.projectMeta && typeof project.projectMeta === 'object' ? project.projectMeta : {})
+            };
+        }
+
+        function currentProjectInfoDraft() {
+            return {
+                ...currentProjectMeta(),
+                ...(state.projectInfoDraft && typeof state.projectInfoDraft === 'object' ? state.projectInfoDraft : {})
+            };
+        }
+
+        function projectInfoInputs() {
+            return {
+                title: projectInfoPanel ? projectInfoPanel.querySelector('[data-project-info-input="title"]') : null,
+                description: projectInfoPanel ? projectInfoPanel.querySelector('[data-project-info-input="description"]') : null,
+                save: projectInfoPanel ? projectInfoPanel.querySelector('[data-project-info-save]') : null,
+                status: projectInfoPanel ? projectInfoPanel.querySelector('[data-project-info-status]') : null
+            };
+        }
+
+        function updateWorkspaceSaveState(nextState = state.saveState || 'saved', message = '') {
+            state.saveState = nextState;
+            const dirty = nextState === 'unsaved' || Boolean(state.projectInfoDirty);
+            const label = message || (nextState === 'saving'
+                ? 'Saving...'
+                : nextState === 'failed'
+                    ? 'Save failed'
+                    : dirty
+                        ? 'Unsaved changes'
+                        : 'Changes saved');
+            workspace.dataset.saveState = nextState;
+            workspace.querySelectorAll('[data-workspace-save-status]').forEach(node => {
+                node.textContent = label;
+            });
+            workspace.querySelectorAll('[data-workspace-save-state]').forEach(button => {
+                button.disabled = !dirty || nextState === 'saving';
+                button.classList.toggle('disabled', button.disabled);
+            });
+            const inputs = projectInfoInputs();
+            if (inputs.save) inputs.save.disabled = !dirty || nextState === 'saving';
+            if (inputs.status) inputs.status.textContent = label;
+        }
+
+        function refreshProjectInfoFields() {
+            const draft = currentProjectInfoDraft();
+            const inputs = projectInfoInputs();
+            if (inputs.title && document.activeElement !== inputs.title) inputs.title.value = draft.title || draft.projectName || '';
+            if (inputs.description && document.activeElement !== inputs.description) inputs.description.value = draft.description || draft.englishDescription || '';
+            const coverNode = projectInfoPanel ? projectInfoPanel.querySelector('[data-project-cover]') : null;
+            if (coverNode) {
+                const cover = draft.coverImage && typeof draft.coverImage === 'object' ? draft.coverImage : {};
+                const coverUrl = cover.url || '';
+                if (coverUrl) {
+                    coverNode.innerHTML = `<img src="${escapeHtml(coverUrl)}" alt="${escapeHtml(draft.title || draft.projectName || 'Generated Game')} Preview Image">`;
+                } else {
+                    const coverStatus = cover.status || 'preview_screenshot_pending';
+                    coverNode.innerHTML = `<div class="project-cover-fallback"><span>Preview Image</span><small>${escapeHtml(String(coverStatus).replace(/_/g, ' '))}</small></div>`;
+                }
+            }
+            workspace.querySelectorAll('[data-generated-game-title]').forEach(node => {
+                node.textContent = draft.title || draft.projectName || 'Generated Game';
+            });
+            workspace.querySelectorAll('[data-workspace-project-chip]').forEach(node => {
+                node.innerHTML = `${escapeHtml(draft.title || draft.projectName || 'Generated Game')} <span aria-hidden="true">&#8964;</span>`;
+            });
+            const frame = workspace.querySelector('.template-preview-frame');
+            if (frame) frame.title = `${draft.title || draft.projectName || 'Generated Game'} playable AI direct preview`;
+        }
+
+        function buildPublishChecklist() {
+            const meta = currentProjectInfoDraft();
+            const cover = meta.coverImage && typeof meta.coverImage === 'object' ? meta.coverImage : {};
+            const coverReady = Boolean(cover.url || cover.path || cover.status === 'generated' || cover.status === 'provided' || cover.status === 'preview_screenshot');
+            const project = plan && plan.generatedProject ? plan.generatedProject : {};
+            const previewReady = workspace.dataset.previewStatus === 'verified'
+                || project.validationReport?.browserRender?.ok === true;
+            return [
+                { id: 'title', label: 'Project name', ok: Boolean(String(meta.title || meta.projectName || '').trim()) },
+                { id: 'description', label: 'English description', ok: Boolean(String(meta.description || meta.englishDescription || '').trim()) },
+                { id: 'cover', label: 'Preview image or cover', ok: coverReady },
+                { id: 'preview', label: 'Playable preview verified', ok: previewReady }
+            ];
+        }
+
+        function updateWorkspacePublishState() {
+            const checklist = buildPublishChecklist();
+            state.publishChecklist = checklist;
+            const missing = checklist.filter(item => !item.ok);
+            workspace.querySelectorAll('[data-workspace-publish]').forEach(button => {
+                button.disabled = missing.length > 0;
+                button.classList.toggle('disabled', button.disabled);
+                button.title = missing.length
+                    ? `Publish checklist: ${missing.map(item => item.label).join(', ')}`
+                    : 'Publish-ready metadata and preview are available.';
+            });
+        }
+
+        function capturePreviewCoverDataUrl() {
+            const directCanvas = workspace.querySelector('.preview-play-column canvas.game-preview-canvas');
+            let sourceCanvas = directCanvas && directCanvas.width && directCanvas.height ? directCanvas : null;
+            if (!sourceCanvas) {
+                const frame = workspace.querySelector('.preview-play-column iframe.template-preview-frame');
+                try {
+                    const frameCanvas = frame && frame.contentDocument ? frame.contentDocument.querySelector('canvas') : null;
+                    if (frameCanvas && frameCanvas.width && frameCanvas.height) sourceCanvas = frameCanvas;
+                } catch (error) {
+                    sourceCanvas = null;
+                }
+            }
+            if (!sourceCanvas) return '';
+            try {
+                const maxWidth = 960;
+                const maxHeight = 540;
+                const ratio = Math.min(maxWidth / sourceCanvas.width, maxHeight / sourceCanvas.height, 1);
+                const width = Math.max(1, Math.round(sourceCanvas.width * ratio));
+                const height = Math.max(1, Math.round(sourceCanvas.height * ratio));
+                const coverCanvas = document.createElement('canvas');
+                coverCanvas.width = width;
+                coverCanvas.height = height;
+                const context = coverCanvas.getContext('2d');
+                if (!context) return '';
+                context.fillStyle = '#070b16';
+                context.fillRect(0, 0, width, height);
+                context.drawImage(sourceCanvas, 0, 0, width, height);
+                return coverCanvas.toDataURL('image/png');
+            } catch (error) {
+                recordDiagnostic('workspace-cover-capture-failed', {
+                    message: error && (error.message || String(error))
+                });
+                return '';
+            }
+        }
+
+        function ensurePreviewScreenshotCoverFallback() {
+            const meta = currentProjectInfoDraft();
+            const cover = meta.coverImage && typeof meta.coverImage === 'object' ? meta.coverImage : {};
+            if (cover.url || cover.status === 'generated' || cover.status === 'provided') return;
+            const project = plan && plan.generatedProject ? plan.generatedProject : {};
+            const previewUrl = project.previewUrl || '';
+            const capturedUrl = capturePreviewCoverDataUrl();
+            const nextMeta = {
+                ...meta,
+                coverImage: {
+                    ...cover,
+                    status: 'preview_screenshot',
+                    url: capturedUrl || cover.url || '',
+                    path: capturedUrl ? 'preview_screenshot.png' : (previewUrl || 'preview_screenshot'),
+                    prompt: cover.prompt || 'Fallback cover derived from the playable preview.'
+                },
+                updatedAt: new Date().toISOString()
+            };
+            state.projectInfoDraft = nextMeta;
+            syncProjectMetaToGeneratedProject(plan, nextMeta);
+            refreshProjectInfoFields();
+        }
+
+        function markProjectInfoDirty() {
+            const inputs = projectInfoInputs();
+            const nextDraft = {
+                ...currentProjectInfoDraft(),
+                title: redactSensitiveText(inputs.title ? inputs.title.value.trim() : ''),
+                projectName: redactSensitiveText(inputs.title ? inputs.title.value.trim() : ''),
+                description: redactSensitiveText(inputs.description ? inputs.description.value.trim() : ''),
+                englishDescription: redactSensitiveText(inputs.description ? inputs.description.value.trim() : ''),
+                updatedAt: new Date().toISOString()
+            };
+            state.projectInfoDraft = nextDraft;
+            state.projectInfoDirty = true;
+            updateWorkspaceSaveState('unsaved');
+            refreshProjectInfoFields();
+            updateWorkspacePublishState();
+            scheduleWorkspaceSnapshotSave(workspace, plan, 'project_info_draft');
+        }
+
+        function commitProjectInfoChanges(source = 'Save Changes') {
+            if (!state.projectInfoDirty && state.saveState !== 'unsaved') {
+                updateWorkspaceSaveState('saved');
+                return false;
+            }
+            updateWorkspaceSaveState('saving');
+            const nextMeta = {
+                ...currentProjectInfoDraft(),
+                language: 'en',
+                updatedAt: new Date().toISOString()
+            };
+            if (!nextMeta.coverImage || typeof nextMeta.coverImage !== 'object') {
+                nextMeta.coverImage = { status: 'preview_screenshot_pending', path: '', prompt: '' };
+            }
+            if (plan && plan.generatedSpec && plan.generatedSpec.meta) {
+                plan.generatedSpec.meta.gameName = nextMeta.title || nextMeta.projectName || plan.generatedSpec.meta.gameName;
+                plan.generatedSpec.meta.description = nextMeta.description || nextMeta.englishDescription || plan.generatedSpec.meta.description;
+            }
+            syncProjectMetaToGeneratedProject(plan, nextMeta);
+            state.projectInfoDraft = {};
+            state.projectInfoDirty = false;
+            refreshProjectInfoFields();
+            updateWorkspaceSaveState('saved', 'Info saved');
+            updateWorkspacePublishState();
+            refreshWorkspaceCodePanel(workspace, plan);
+            scheduleWorkspaceSnapshotSave(workspace, plan, 'project_info_saved');
+            persistWorkspaceSnapshot(workspace, plan, 'project_info_saved');
+            return true;
+        }
+
+        function showPublishChecklist() {
+            const checklist = buildPublishChecklist();
+            updateWorkspacePublishState();
+            const missing = checklist.filter(item => !item.ok);
+            setProjectInfoOpen(true);
+            addWorkspaceSystemNotice(
+                workspace,
+                missing.length ? 'Publish checklist incomplete' : 'Publish checklist ready',
+                missing.length
+                    ? `Complete: ${missing.map(item => item.label).join(', ')}. Publishing will stay disabled until these pass.`
+                    : 'This project is ready for the next publish integration step.',
+                'Publish'
+            );
+        }
+
+        async function publishWorkspaceProject() {
+            const checklist = buildPublishChecklist();
+            const missing = checklist.filter(item => !item.ok);
+            if (missing.length) {
+                showPublishChecklist();
+                return;
+            }
+            const publishButtons = Array.from(workspace.querySelectorAll('[data-workspace-publish]'));
+            publishButtons.forEach(button => {
+                button.disabled = true;
+                button.textContent = 'Publishing...';
+            });
+            try {
+                const project = plan && plan.generatedProject ? plan.generatedProject : {};
+                const payload = stripSensitiveWorkspaceKeys({
+                    projectId: project.projectId || project.id || resolveWorkspaceProjectId(plan),
+                    previewStatus: workspace.dataset.previewStatus || '',
+                    projectMeta: currentProjectInfoDraft(),
+                    codeFiles: buildWorkspaceCodeFiles(project, plan && plan.generatedSpec, workspace).map(file => ({
+                        path: file.path,
+                        content: String(file.content || '')
+                    })),
+                    validationReport: project.validationReport || null,
+                    generationReport: project.generationReport || null,
+                    sourceTrace: project.sourceTrace || null
+                });
+                const response = await fetch(apiUrl('/api/projects/publish'), {
+                    method: 'POST',
+                    credentials: 'include',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify(payload)
+                });
+                const data = await parseJsonResponse(response);
+                state.publishResult = data;
+                state.publishChecklist = data.checklist || checklist;
+                workspace.dataset.publishState = 'published';
+                if (plan && plan.generatedProject) {
+                    plan.generatedProject.publishResult = data;
+                    syncProjectMetaToGeneratedProject(plan, data.projectMeta || payload.projectMeta);
+                }
+                updateWorkspaceShareMenuState();
+                addWorkspaceHistoryRecord(workspace, {
+                    title: 'Published project',
+                    category: 'Publish',
+                    prompt: 'Publish current generated game',
+                    summary: data.publicUrl ? `Published to ${data.publicUrl}` : 'Publish payload accepted.'
+                });
+                addWorkspaceSystemNotice(
+                    workspace,
+                    'Published',
+                    data.publicUrl ? `Publish complete. Public URL: ${data.publicUrl}` : 'Publish complete.',
+                    'Publish'
+                );
+                scheduleWorkspaceSnapshotSave(workspace, plan, 'project_published');
+                persistWorkspaceSnapshot(workspace, plan, 'project_published');
+            } catch (error) {
+                addWorkspaceSystemNotice(
+                    workspace,
+                    'Publish failed',
+                    error && (error.message || String(error)) || 'The publish request failed.',
+                    'Publish'
+                );
+            } finally {
+                publishButtons.forEach(button => {
+                    button.textContent = workspace.dataset.publishState === 'published' ? 'Published' : 'Publish';
+                });
+                updateWorkspacePublishState();
+                updateWorkspaceShareMenuState();
+            }
+        }
+
+        function getPublishedWorkspaceUrl() {
+            const project = plan && plan.generatedProject ? plan.generatedProject : {};
+            const publicUrl = (state.publishResult && state.publishResult.publicUrl)
+                || (project.publishResult && project.publishResult.publicUrl)
+                || '';
+            if (!publicUrl) return '';
+            try {
+                return new URL(publicUrl, window.location.origin).href;
+            } catch (error) {
+                return publicUrl;
+            }
+        }
+
+        function setShareMenuOpen(open) {
+            workspace.querySelectorAll('[data-workspace-share-menu]').forEach(menu => {
+                menu.hidden = !open;
+            });
+            workspace.querySelectorAll('[data-workspace-share-menu-toggle]').forEach(button => {
+                button.setAttribute('aria-expanded', open ? 'true' : 'false');
+            });
+        }
+
+        function updateWorkspaceShareMenuState() {
+            const publishedUrl = getPublishedWorkspaceUrl();
+            workspace.querySelectorAll('[data-workspace-copy-link]').forEach(button => {
+                button.disabled = !publishedUrl;
+                button.classList.toggle('disabled', button.disabled);
+                button.title = publishedUrl ? 'Copy published project link.' : 'Publish first to copy a public link.';
+            });
+        }
+
+        async function copyWorkspacePublishedLink(button = null) {
+            const publishedUrl = getPublishedWorkspaceUrl();
+            if (!publishedUrl) {
+                showPublishChecklist();
+                return;
+            }
+            try {
+                await navigator.clipboard.writeText(publishedUrl);
+                if (button) button.textContent = 'Copied';
+                addWorkspaceSystemNotice(workspace, 'Link copied', publishedUrl, 'Share');
+            } catch (error) {
+                if (chatInputField) setChatInputValue(publishedUrl, { focus: true, cursorToEnd: true, dispatch: true });
+                addWorkspaceSystemNotice(workspace, 'Copy link ready', 'The published URL was placed in the chat input.', 'Share');
+            } finally {
+                window.setTimeout(() => {
+                    if (button) button.textContent = 'Copy link';
+                }, 1400);
+            }
+        }
+
+        function bindWorkspaceShareMenuControls() {
+            workspace.querySelectorAll('[data-workspace-share-menu-toggle]').forEach(button => {
+                button.addEventListener('click', event => {
+                    event.preventDefault();
+                    const menu = workspace.querySelector('[data-workspace-share-menu]');
+                    setShareMenuOpen(menu ? menu.hidden : true);
+                    updateWorkspaceShareMenuState();
+                });
+            });
+            workspace.querySelectorAll('[data-workspace-export-zip]').forEach(button => {
+                button.addEventListener('click', event => {
+                    event.preventDefault();
+                    setShareMenuOpen(false);
+                    saveWorkspaceZip(workspace, plan);
+                });
+            });
+            workspace.querySelectorAll('[data-workspace-copy-link]').forEach(button => {
+                button.addEventListener('click', event => {
+                    event.preventDefault();
+                    if (button.disabled) return;
+                    setShareMenuOpen(false);
+                    copyWorkspacePublishedLink(button);
+                });
+            });
+            document.addEventListener('click', event => {
+                if (!workspace.isConnected) return;
+                if (workspace.contains(event.target) && event.target.closest('[data-workspace-share-export]')) return;
+                setShareMenuOpen(false);
+            });
+            updateWorkspaceShareMenuState();
+        }
+
+        function bindProjectInfoControls() {
+            const inputs = projectInfoInputs();
+            [inputs.title, inputs.description].filter(Boolean).forEach(input => {
+                input.addEventListener('input', markProjectInfoDirty);
+                input.addEventListener('change', markProjectInfoDirty);
+            });
+            if (inputs.save) inputs.save.addEventListener('click', () => commitProjectInfoChanges('Save project info'));
+            workspace.querySelectorAll('[data-workspace-save-state]').forEach(button => {
+                button.addEventListener('click', () => commitProjectInfoChanges('Save Info'));
+            });
+            workspace.querySelectorAll('[data-workspace-publish]').forEach(button => {
+                button.addEventListener('click', event => {
+                    if (button.disabled) {
+                        event.preventDefault();
+                        showPublishChecklist();
+                        return;
+                    }
+                    event.preventDefault();
+                    publishWorkspaceProject();
+                });
+            });
+            workspace.addEventListener('workspace-preview-status-change', event => {
+                if (event.detail && event.detail.status === 'verified') ensurePreviewScreenshotCoverFallback();
+                updateWorkspacePublishState();
+            });
+            if (plan && plan.generatedProject && plan.generatedProject.validationReport?.browserRender?.ok === true) {
+                window.setTimeout(() => ensurePreviewScreenshotCoverFallback(), 800);
+            }
+            refreshProjectInfoFields();
+            updateWorkspaceSaveState(state.projectInfoDirty ? 'unsaved' : 'saved');
+            updateWorkspacePublishState();
+        }
+
+        function bindWorkspaceVersionControls() {
+            workspace.querySelectorAll('[data-workspace-undo]').forEach(button => {
+                button.addEventListener('click', event => {
+                    event.preventDefault();
+                    if (!button.disabled) stepWorkspaceVersion(workspace, plan, -1);
+                });
+            });
+            workspace.querySelectorAll('[data-workspace-redo]').forEach(button => {
+                button.addEventListener('click', event => {
+                    event.preventDefault();
+                    if (!button.disabled) stepWorkspaceVersion(workspace, plan, 1);
+                });
+            });
+            updateWorkspaceVersionControls(workspace, plan);
+        }
+
+        function removeAdvancedTargetOverrideChip() {
+            workspace.querySelectorAll('[data-edit-target-chip]').forEach(targetChip => targetChip.remove());
+            if (context && context.parentElement) {
+                context.parentElement.querySelectorAll('[data-edit-target-chip]').forEach(targetChip => targetChip.remove());
+            }
+            workspace.__pinnedEditTargetId = '';
+        }
+
+        function ensureAdvancedTargetOverrideChip() {
+            if (!context || !context.parentElement) return null;
+            const existing = context.parentElement.querySelector('[data-edit-target-chip]');
+            if (existing) return existing;
             const chip = document.createElement('div');
             chip.className = 'edit-target-chip';
             chip.dataset.editTargetChip = '1';
             const chipLabel = document.createElement('span');
-            chipLabel.textContent = 'Editing target:';
+            chipLabel.textContent = 'Target override:';
             const select = document.createElement('select');
-            select.setAttribute('aria-label', 'Choose what your next edit applies to');
+            select.setAttribute('aria-label', 'Manually override what your next edit applies to');
             const autoOption = document.createElement('option');
             autoOption.value = '';
             autoOption.textContent = 'Auto (follow my prompt)';
@@ -11319,8 +14104,10 @@ console.log('Droi generated game:', GAME_TITLE);`
             wholeOption.value = 'project.overall';
             wholeOption.textContent = 'Whole Game';
             select.appendChild(wholeOption);
+            const numericSettings = getWorkspaceNumericSettings(workspace);
             GAME_EDIT_CATEGORIES.forEach(category => {
                 (category.items || []).forEach(item => {
+                    if (item.type === 'number' && !numericSettings[item.id]) return;
                     const option = document.createElement('option');
                     option.value = item.id;
                     option.textContent = `${category.label} / ${item.title}`;
@@ -11332,6 +14119,7 @@ console.log('Droi generated game:', GAME_TITLE);`
             });
             chip.append(chipLabel, select);
             context.parentElement.insertBefore(chip, context);
+            return chip;
         }
 
         function syncWorkspaceModeButtons(activeMode) {
@@ -11356,11 +14144,6 @@ console.log('Droi generated game:', GAME_TITLE);`
                     warning.scrollIntoView({ behavior: 'smooth', block: 'nearest' });
                 }
                 syncWorkspaceModeButtons('beginner');
-                addPreviewChatRecord(workspace, {
-                    title: 'Advanced mode unavailable on this screen',
-                    prompt: 'Open Advanced mode',
-                    summary: 'Advanced tools need the desktop workspace. Please open this generated game on a PC to use Media, Code and local tools.'
-                });
                 return;
             }
             const nextMode = mode === 'advanced' ? 'advanced' : 'beginner';
@@ -11374,20 +14157,22 @@ console.log('Droi generated game:', GAME_TITLE);`
             if (modeLabel) modeLabel.textContent = nextMode === 'advanced' ? 'Advanced mode' : 'Beginner mode';
             syncWorkspaceModeButtons(nextMode);
             editRoot.querySelectorAll('[data-edit-module-tab]').forEach(tab => {
-                const locked = nextMode !== 'advanced' && tab.dataset.editModuleTab !== 'stats';
+                const moduleId = tab.dataset.editModuleTab || '';
+                const capabilityState = getWorkspaceModuleCapabilityState(moduleId, plan.generatedProject);
+                const locked = !capabilityState.available || (nextMode !== 'advanced' && moduleId !== 'stats');
                 tab.classList.toggle('is-locked', locked);
+                tab.classList.toggle('capability-locked', !capabilityState.available);
                 tab.setAttribute('aria-disabled', locked ? 'true' : 'false');
             });
+            if (nextMode === 'advanced') {
+                hideWorkspaceAdvancedHint(0);
+            }
             if (nextMode !== 'advanced') {
+                removeAdvancedTargetOverrideChip();
                 const statsTab = editRoot.querySelector('[data-edit-module-tab="stats"]');
                 if (statsTab) statsTab.click();
-            }
-            if (nextMode === 'advanced' && wasMode && wasMode !== 'advanced') {
-                addPreviewChatRecord(workspace, {
-                    title: 'Advanced mode',
-                    prompt: 'Switch to Advanced workspace',
-                    summary: 'Advanced mode shows media assets, files and the local Droi-Game-Tool set.'
-                });
+            } else {
+                ensureAdvancedTargetOverrideChip();
             }
             scheduleWorkspaceSnapshotSave(workspace, plan, 'workspace_mode');
         }
@@ -11395,6 +14180,8 @@ console.log('Droi generated game:', GAME_TITLE);`
         workspace.querySelectorAll('[data-workspace-mode-set]').forEach(button => {
             button.addEventListener('click', () => setWorkspaceMode(button.dataset.workspaceModeSet));
         });
+        bindProjectInfoControls();
+        bindWorkspaceVersionControls();
         setWorkspaceMode('beginner');
 
         if (historySidebar) {
@@ -11444,6 +14231,13 @@ console.log('Droi generated game:', GAME_TITLE);`
             syncCompactViewSwitch(nextView);
             stabilizeCompactGeneratedView(nextView);
             if (nextView === 'preview') {
+                const frame = workspace.querySelector('.template-preview-frame');
+                if (frame && frame.__pendingVisibleReload) {
+                    frame.__pendingVisibleReload = false;
+                    reloadSrcdocPreviewFrame(frame);
+                } else {
+                    nudgePreviewFrameLayout(frame);
+                }
                 workspace.dispatchEvent(new CustomEvent('workspace-preview-visible', { bubbles: true }));
             } else {
                 scrollPreviewChatToLatest(workspace, 'smooth');
@@ -11491,7 +14285,7 @@ console.log('Droi generated game:', GAME_TITLE);`
         function selectItem(itemId) {
             selectedItem = findGameEditItem(itemId) || selectedItem;
             workspace.__selectedItemId = itemId;
-            if (WORKSPACE_NUMERIC_SETTINGS[itemId]) {
+            if (getWorkspaceNumericSettings(workspace)[itemId]) {
                 getWorkspaceState(workspace).selectedNumericItemId = itemId;
             }
             editRoot.querySelectorAll('[data-edit-item]').forEach(button => {
@@ -11509,6 +14303,7 @@ console.log('Droi generated game:', GAME_TITLE);`
 
         async function applyWorkspacePrompt(prompt) {
             if (!prompt) return false;
+            prompt = redactSensitiveText(prompt);
             const pinnedId = workspace.__pinnedEditTargetId || '';
             let pinnedItem = null;
             if (pinnedId === 'project.overall') {
@@ -11544,47 +14339,84 @@ console.log('Droi generated game:', GAME_TITLE);`
             }
             const summary = `AI edit requested for ${selectedItem.categoryLabel} / ${selectedItem.title}.`;
             const animalIslandTheme = isAnimalIslandPrompt(prompt) ? buildAnimalIslandVisualTheme(prompt) : null;
+            const editRoute = buildWorkspaceEditRoute(selectedItem, prompt);
+            const editEnvelope = buildWorkspaceEditEnvelope(workspace, plan, {
+                source: 'ai',
+                status: 'submitted',
+                item: selectedItem,
+                route: editRoute,
+                prompt,
+                op: 'ai_edit_project',
+                payload: {
+                    visualTheme: animalIslandTheme ? animalIslandTheme.id : '',
+                    requestSummary: summary
+                }
+            });
             const editStartedAt = Date.now();
             const editProjectKey = (plan.generatedProject && (plan.generatedProject.projectId || plan.generatedProject.id)) || 'workspace';
             const prevEditFiles = buildWorkspaceCodeFiles(plan.generatedProject || {}, plan.generatedSpec || null, null)
                 .filter(file => file && file.content != null)
                 .map(file => ({ path: file.path || file.name, content: String(file.content || '') }));
             const workStatusId = `workspace-edit-${Date.now()}`;
+            const selectedModelLabel = getActiveModelMeta().label || getModelLabel(aiConfig.activeProvider, getProviderModelId(aiConfig.activeProvider)) || 'Selected model';
             addWorkspaceAssistantStatus(workspace, {
                 id: workStatusId,
                 state: 'working',
-                title: 'Working on your edit',
-                body: `Applying your instruction to ${selectedItem.categoryLabel} / ${selectedItem.title}.`,
+                title: 'Working on your edit...',
+                body: `I am applying your instruction to ${selectedItem.categoryLabel} / ${selectedItem.title}.`,
                 steps: [
-                    'Reading the current game.',
-                    'Applying your instruction with AI.',
-                    'Checking the result still plays before refreshing the preview.'
+                    { label: 'Understanding request', status: 'done', area: `${selectedItem.categoryLabel} / ${selectedItem.title}`, summary: 'The edit target was inferred from your message and current selection.' },
+                    { label: 'Planning change', status: 'done', area: editRoute.region, summary: `${editRoute.levelHint} route; gameplay should stay stable unless requested.` },
+                    { label: `Calling ${selectedModelLabel}`, status: 'running', area: 'AI Direct', summary: 'Sending the edit to the selected backend model.' },
+                    { label: 'Refreshing preview', status: 'queued', area: 'Workspace' },
+                    { label: 'Validating playable result', status: 'queued', area: 'Backend validation' },
+                    { label: 'Saving version', status: 'queued', area: 'History' }
                 ]
             });
             let aiEditedProject = null;
             let aiEditFailed = null;
             try {
-                aiEditedProject = await editAIDirectGameProject(plan, prompt, {
-                    itemId: selectedItem.id,
-                    category: selectedItem.categoryLabel,
-                    title: selectedItem.title,
-                    type: selectedItem.type,
-                    visualTheme: animalIslandTheme ? animalIslandTheme.id : undefined
-                });
+                aiEditedProject = await submitWorkspaceEdit(workspace, plan, editEnvelope, () => editAIDirectGameProject(plan, prompt, {
+                        itemId: selectedItem.id,
+                        category: selectedItem.categoryLabel,
+                        title: selectedItem.title,
+                        type: selectedItem.type,
+                        visualTheme: animalIslandTheme ? animalIslandTheme.id : undefined,
+                        region: editRoute.region,
+                        levelHint: editRoute.levelHint,
+                            sourceTrace: editRoute.sourceTrace
+                    }));
                 plan.generatedProject = aiEditedProject;
+                applyWorkspaceFilePatch(workspace, plan, selectedItem, prompt, {
+                    visualTheme: animalIslandTheme || null,
+                    route: editRoute
+                });
+                aiEditedProject = plan.generatedProject;
                 plan.aiDirectGeneration = {
                     ...(plan.aiDirectGeneration || {}),
                     modelMeta: aiEditedProject.modelMeta || null,
                     validationReport: aiEditedProject.validationReport || null,
                     generationReport: aiEditedProject.generationReport || null,
                     lastEditPrompt: prompt,
-                    lastEditTarget: selectedItem.id
+                    lastEditTarget: selectedItem.id,
+                    lastEditRoute: editRoute
                 };
+                recordDiagnostic('workspace-edit-route', {
+                    phase: 'AI direct game edit',
+                    level: editRoute.levelHint,
+                    region: editRoute.region,
+                    ranBackend: true,
+                    sourceTrace: editRoute.sourceTrace
+                });
                 refreshWorkspacePreviewProject(workspace, container, plan, aiEditedProject);
             } catch (error) {
                 aiEditFailed = classifyAIFlowError(error, 'AI direct game edit');
                 recordDiagnostic('ai-direct-edit-failed', {
                     phase: 'AI direct game edit',
+                    level: editRoute.levelHint,
+                    region: editRoute.region,
+                    ranBackend: true,
+                    sourceTrace: editRoute.sourceTrace,
                     message: aiEditFailed.message || String(error),
                     technicalMessage: aiEditFailed.technicalMessage || ''
                 });
@@ -11595,14 +14427,20 @@ console.log('Droi generated game:', GAME_TITLE);`
                 updateWorkspaceAssistantStatus(workspace, workStatusId, {
                     state: 'failed',
                     title: `AI edit failed - ${aiEditFailed.title}`,
-                    body: `${aiEditFailed.message} The playable preview was not changed.`,
+                    body: `${aiEditFailed.message} Preview was not changed.`,
                     steps: [
-                        `Target: ${selectedItem.categoryLabel} / ${selectedItem.title}`,
-                        'Retry, switch model, or simplify the edit instruction.'
+                        { label: 'Understanding request', status: 'done', area: `${selectedItem.categoryLabel} / ${selectedItem.title}` },
+                        { label: 'Planning change', status: 'done', area: editRoute.region, summary: `${editRoute.levelHint} route.` },
+                        { label: `Calling ${selectedModelLabel}`, status: 'failed', area: 'AI Direct', summary: aiEditFailed.message || 'The model request failed.' },
+                        { label: 'Refreshing preview', status: 'skipped', area: 'Workspace', summary: 'Preview was not changed.' },
+                        { label: 'Validating playable result', status: 'skipped', area: 'Backend validation' },
+                        { label: 'Saving version', status: 'skipped', area: 'History' }
                     ]
                 });
             } else {
                 // Edit receipt card: what changed / what was not touched / how to revert (T2.3).
+                const rawBackendSummary = (aiEditedProject && (aiEditedProject.changeSummary
+                    || (aiEditedProject.generationReport && aiEditedProject.generationReport.changeSummary))) || null;
                 editReceipt = renderWorkspaceEditReceipt(workspace, {
                     workStatusId,
                     plan,
@@ -11611,8 +14449,14 @@ console.log('Droi generated game:', GAME_TITLE);`
                     nextFiles: (aiEditedProject && aiEditedProject.codeFiles) || [],
                     prompt,
                     target: `${selectedItem.categoryLabel} / ${selectedItem.title}`,
-                    backendSummary: (aiEditedProject && (aiEditedProject.changeSummary
-                        || (aiEditedProject.generationReport && aiEditedProject.generationReport.changeSummary))) || null,
+                    backendSummary: rawBackendSummary && typeof rawBackendSummary === 'object'
+                        ? {
+                            ...rawBackendSummary,
+                            previewStatus: previewStatusFromProject(aiEditedProject),
+                            ranBackend: true,
+                            sourceTrace: editRoute.sourceTrace
+                        }
+                        : null,
                     durationMs: Date.now() - editStartedAt
                 });
                 if (!editReceipt) {
@@ -11620,11 +14464,19 @@ console.log('Droi generated game:', GAME_TITLE);`
                         state: 'done',
                         title: 'Edit applied to the playable preview',
                         body: `${summary} The preview, Code panel and Save ZIP files were refreshed.`,
-                        steps: [`Target: ${selectedItem.categoryLabel} / ${selectedItem.title}`]
+                        steps: [
+                            { label: 'Understanding request', status: 'done', area: `${selectedItem.categoryLabel} / ${selectedItem.title}` },
+                            { label: 'Planning change', status: 'done', area: `${editRoute.levelHint} / ${editRoute.region}` },
+                            { label: `Calling ${selectedModelLabel}`, status: 'done', area: 'AI Direct' },
+                            { label: 'Refreshing preview', status: 'done', area: 'Workspace' },
+                            { label: 'Validating playable result', status: 'done', area: previewStatusFromProject(aiEditedProject) },
+                            { label: 'Saving version', status: 'done', area: 'History' }
+                        ]
                     });
                 }
             }
             workspace.__editVersion = (workspace.__editVersion || 0) + 1;
+            updateWorkspaceVersionControls(workspace, plan);
             addWorkspaceHistoryRecord(workspace, {
                 title: selectedItem.title,
                 category: selectedItem.categoryLabel,
@@ -11649,18 +14501,138 @@ console.log('Droi generated game:', GAME_TITLE);`
             return true;
         }
 
-        function showWorkspaceAdvancedHint(moduleId) {
-            const hint = editRoot.querySelector('[data-advanced-lock-hint]');
-            const labelMap = { media: 'Media assets', code: 'Code files', tools: 'Local tools' };
-            const label = labelMap[moduleId] || 'This tool';
-            if (hint) {
-                hint.hidden = false;
-                hint.textContent = `${label} are available in Advanced mode. Switch to Advanced to inspect assets, files, and local tools.`;
-                window.clearTimeout(hint.__hideTimer);
-                hint.__hideTimer = window.setTimeout(() => {
-                    hint.hidden = true;
-                }, 3600);
+        function addWorkspaceEditPlanCard(intent = {}, sourcePrompt = '') {
+            const taskText = String(intent.primaryTask || sourcePrompt || 'Apply this workspace edit.').trim();
+            const targetText = String(intent.primaryIntent || 'edit_game').replace(/_/g, ' ');
+            return addWorkspaceAssistantStatus(workspace, {
+                state: 'done',
+                title: 'I will update the game',
+                body: `I will apply: ${taskText}`,
+                steps: [
+                    { label: 'Update scope', status: 'done', area: targetText },
+                    { label: 'Preserve gameplay', status: 'done', area: 'Keep the current playable loop unless your request changes it.' },
+                    { label: 'Validate preview', status: 'done', area: 'Refresh the preview and save a recoverable version.' }
+                ]
+            });
+        }
+
+        function addWorkspaceIntentSummaryCard(intent, sourcePrompt = '') {
+            ensureWorkspaceAiWorkStyles();
+            const panel = workspace.querySelector('[data-preview-chat-panel]');
+            const anchor = panel ? panel.querySelector('[data-workspace-edit-context]') : null;
+            if (!panel) return null;
+            const card = document.createElement('div');
+            card.className = 'workspace-ai-work-card workspace-intent-card';
+            const constraints = (intent.constraints || []).map(item => `<li>${escapeHtml(item)}</li>`).join('');
+            const criteria = (intent.acceptanceCriteria || []).map(item => `<li>${escapeHtml(item)}</li>`).join('');
+            card.innerHTML = [
+                '<div class="workspace-ai-work-head">',
+                '<span aria-hidden="true">?</span>',
+                '<strong>Here is what I understood...</strong>',
+                '</div>',
+                `<p><strong>Task:</strong> ${escapeHtml(intent.primaryTask || 'Clarify the request.')}</p>`,
+                `<p><strong>Intent:</strong> ${escapeHtml(String(intent.primaryIntent || 'unclear').replace(/_/g, ' '))} (${Math.round((intent.confidence || 0) * 100)}%)</p>`,
+                intent.backgroundSummary ? `<p><strong>Background:</strong> ${escapeHtml(intent.backgroundSummary)}</p>` : '',
+                constraints ? `<ol>${constraints}</ol>` : '',
+                criteria ? `<ol>${criteria}</ol>` : '',
+                '<div class="summary-actions workspace-intent-actions">',
+                '<button type="button" class="chat-action-btn chat-action-primary" data-workspace-intent-action="use">Use this task</button>',
+                '<button type="button" class="chat-action-btn chat-action-edit" data-workspace-intent-action="edit">Edit summary</button>',
+                '<button type="button" class="chat-action-btn" data-workspace-intent-action="question">Ask me one question</button>',
+                '<button type="button" class="chat-action-btn chat-action-exit" data-workspace-intent-action="start-over">Start over</button>',
+                '</div>'
+            ].join('');
+            card.querySelectorAll('[data-workspace-intent-action]').forEach(button => {
+                button.addEventListener('click', async () => {
+                    const action = button.dataset.workspaceIntentAction;
+                    const prompt = buildIntentContinuationPrompt(intent, sourcePrompt);
+                    if (action === 'use') {
+                        card.querySelectorAll('[data-workspace-intent-action]').forEach(item => {
+                            item.disabled = true;
+                            item.style.pointerEvents = 'none';
+                        });
+                        const workspaceEditLike = intent.primaryIntent === 'edit_game'
+                            || /\b(make|change|edit|update|tune|adjust|replace|refresh|preserve|keep|style|visual|difficulty|controls?|assets?|metadata|manifest|report)\b/i.test(`${prompt}\n${sourcePrompt || ''}`);
+                        if (workspaceEditLike) {
+                            addWorkspaceEditPlanCard(intent, sourcePrompt || prompt);
+                            await applyWorkspacePrompt(prompt);
+                            if (chatInputField) setChatInputValue('', { dispatch: true });
+                        } else {
+                            addWorkspaceAssistantStatus(workspace, {
+                                state: 'done',
+                                title: 'Task confirmed',
+                                body: 'This was not sent as a game edit. Ask a game change or switch to a generation request when ready.',
+                                steps: [`Intent: ${String(intent.primaryIntent || 'unclear').replace(/_/g, ' ')}`]
+                            });
+                        }
+                    } else if (action === 'edit') {
+                        if (chatInputField) setChatInputValue(prompt, { focus: true, cursorToEnd: true, dispatch: true });
+                    } else if (action === 'question') {
+                        addWorkspaceAssistantStatus(workspace, {
+                            state: 'done',
+                            title: 'One question',
+                            body: intent.clarifyingQuestion || 'Which single workspace edit should I apply first?'
+                        });
+                    } else if (action === 'start-over') {
+                        if (chatInputField) setChatInputValue('', { dispatch: true });
+                        card.remove();
+                        setNeutralEditContext();
+                    }
+                });
+            });
+            if (anchor) panel.insertBefore(card, anchor);
+            else panel.appendChild(card);
+            panel.scrollTop = panel.scrollHeight;
+            return card;
+        }
+
+        async function routeWorkspacePromptWithIntent(prompt) {
+            const safePrompt = redactSensitiveText(prompt);
+            const pendingId = `workspace-intent-${Date.now()}`;
+            addWorkspaceAssistantStatus(workspace, {
+                id: pendingId,
+                state: 'working',
+                title: 'Understanding your request',
+                body: 'Checking whether this is a game edit, a question, or background context.'
+            });
+            const intent = await understandUserIntent(safePrompt, { source: 'workspace', workspace });
+            const pending = workspace.querySelector(`[data-work-status-id="${CSS.escape(pendingId)}"]`);
+            if (pending) pending.remove();
+            if (shouldAutoContinueIntent(intent, 'workspace')) {
+                addWorkspaceEditPlanCard(intent, safePrompt);
+                return applyWorkspacePrompt(buildIntentContinuationPrompt(intent, safePrompt));
             }
+            addWorkspaceIntentSummaryCard(intent, safePrompt);
+            return true;
+        }
+
+        function getWorkspaceAdvancedHintText(moduleId, message = '') {
+            if (message) return message;
+            const copy = {
+                media: 'Media assets are available in Advanced mode.',
+                code: 'Code files are available in Advanced mode.',
+                tools: 'Local tools are available in Advanced mode.'
+            };
+            return copy[moduleId] || 'This workspace tool is available in Advanced mode.';
+        }
+
+        function hideWorkspaceAdvancedHint(delay = 650) {
+            const hint = editRoot.querySelector('[data-advanced-lock-hint]');
+            if (!hint) return;
+            window.clearTimeout(hint.__hideTimer);
+            hint.__hideTimer = window.setTimeout(() => {
+                hint.hidden = true;
+            }, Math.max(0, delay));
+        }
+
+        function showWorkspaceAdvancedHint(moduleId, message = '', options = {}) {
+            const hint = editRoot.querySelector('[data-advanced-lock-hint]');
+            if (!hint) return;
+            window.clearTimeout(hint.__hideTimer);
+            hint.hidden = false;
+            hint.textContent = getWorkspaceAdvancedHintText(moduleId, message);
+            const persistMs = Number.isFinite(options.persistMs) ? options.persistMs : 3600;
+            if (persistMs > 0) hideWorkspaceAdvancedHint(persistMs);
         }
 
         async function submitFromBottomInput(event) {
@@ -11669,13 +14641,35 @@ console.log('Droi generated game:', GAME_TITLE);`
             if (!prompt) return;
             event.preventDefault();
             event.stopImmediatePropagation();
-            if (await applyWorkspacePrompt(prompt)) {
-                setChatInputValue('', { dispatch: true });
-            }
+            workspace.__userChangedGeneratedView = true;
+            setGeneratedView('chat');
+            addPreviewChatUserBubble(workspace, prompt);
+            setChatInputValue('', { dispatch: true });
+            routeWorkspacePromptWithIntent(prompt).catch(error => {
+                const message = error && (error.message || String(error)) || 'The edit request could not be submitted.';
+                addWorkspaceAssistantStatus(workspace, {
+                    state: 'failed',
+                    title: 'Edit request failed',
+                    body: message,
+                    steps: ['Your message was kept in chat.', 'Try again or switch model if the backend is busy.']
+                });
+                recordDiagnostic('workspace-edit-submit-failed', { message });
+            });
         }
 
         function setActiveEditModule(moduleId, options = {}) {
             const currentMode = getWorkspaceState(workspace).mode || workspace.dataset.workspaceMode || 'beginner';
+            const capabilityState = getWorkspaceModuleCapabilityState(moduleId, plan.generatedProject);
+            if (!capabilityState.available) {
+                showWorkspaceAdvancedHint(moduleId, capabilityState.label || 'This generated project does not expose that workspace capability yet.');
+                if (!options.silent) {
+                    recordDiagnostic('workspace-module-capability-locked', {
+                        moduleId,
+                        message: capabilityState.label || ''
+                    });
+                }
+                return false;
+            }
             if (!options.force && currentMode !== 'advanced' && moduleId !== 'stats') {
                 showWorkspaceAdvancedHint(moduleId);
                 return false;
@@ -11699,6 +14693,32 @@ console.log('Droi generated game:', GAME_TITLE);`
             button.addEventListener('click', () => {
                 setActiveEditModule(button.dataset.editModuleTab);
             });
+            button.addEventListener('mouseenter', () => {
+                const moduleId = button.dataset.editModuleTab;
+                const currentMode = getWorkspaceState(workspace).mode || workspace.dataset.workspaceMode || 'beginner';
+                const capabilityState = getWorkspaceModuleCapabilityState(moduleId, plan.generatedProject);
+                if (!capabilityState.available) showWorkspaceAdvancedHint(moduleId, capabilityState.label || '', { persistMs: 0 });
+                else if (currentMode !== 'advanced' && moduleId !== 'stats') showWorkspaceAdvancedHint(moduleId, '', { persistMs: 0 });
+            });
+            button.addEventListener('mouseleave', () => {
+                const moduleId = button.dataset.editModuleTab;
+                const currentMode = getWorkspaceState(workspace).mode || workspace.dataset.workspaceMode || 'beginner';
+                const capabilityState = getWorkspaceModuleCapabilityState(moduleId, plan.generatedProject);
+                if (!capabilityState.available || (currentMode !== 'advanced' && moduleId !== 'stats')) hideWorkspaceAdvancedHint(650);
+            });
+            button.addEventListener('focus', () => {
+                const moduleId = button.dataset.editModuleTab;
+                const currentMode = getWorkspaceState(workspace).mode || workspace.dataset.workspaceMode || 'beginner';
+                const capabilityState = getWorkspaceModuleCapabilityState(moduleId, plan.generatedProject);
+                if (!capabilityState.available) showWorkspaceAdvancedHint(moduleId, capabilityState.label || '', { persistMs: 0 });
+                else if (currentMode !== 'advanced' && moduleId !== 'stats') showWorkspaceAdvancedHint(moduleId, '', { persistMs: 0 });
+            });
+            button.addEventListener('blur', () => {
+                const moduleId = button.dataset.editModuleTab;
+                const currentMode = getWorkspaceState(workspace).mode || workspace.dataset.workspaceMode || 'beginner';
+                const capabilityState = getWorkspaceModuleCapabilityState(moduleId, plan.generatedProject);
+                if (!capabilityState.available || (currentMode !== 'advanced' && moduleId !== 'stats')) hideWorkspaceAdvancedHint(650);
+            });
         });
 
         editRoot.querySelectorAll('[data-droi-tool-open]').forEach(button => {
@@ -11707,9 +14727,7 @@ console.log('Droi generated game:', GAME_TITLE);`
             });
         });
 
-        workspace.querySelectorAll('[data-workspace-save]').forEach(saveButton => {
-            saveButton.addEventListener('click', () => saveWorkspaceZip(workspace, plan));
-        });
+        bindWorkspaceShareMenuControls();
 
         editRoot.querySelectorAll('[data-edit-category-toggle]').forEach(button => {
             button.addEventListener('click', () => {
@@ -11772,13 +14790,18 @@ console.log('Droi generated game:', GAME_TITLE);`
             if (Array.isArray(snapshot.history) && snapshot.history.length) {
                 replaceWorkspaceHistoryRecords(workspace, snapshot.history);
             }
-            Object.keys(WORKSPACE_NUMERIC_SETTINGS).forEach(itemId => {
+            Object.keys(getWorkspaceNumericSettings(workspace)).forEach(itemId => {
                 ensureWorkspaceCommittedNumericValue(workspace, itemId);
                 updateNumericControlDisplay(workspace, itemId, workspaceNumericValue(workspace, itemId));
             });
             updateNumericApplyBar(workspace);
             if (ui.workspaceMode) setWorkspaceMode(ui.workspaceMode);
-            if (ui.activeToolTab) setActiveEditModule(ui.activeToolTab, { force: ui.workspaceMode === 'advanced', skipSelect: true, silent: true });
+            if (ui.activeToolTab) {
+                const restored = setActiveEditModule(ui.activeToolTab, { force: ui.workspaceMode === 'advanced', skipSelect: true, silent: true });
+                if (!restored && ui.activeToolTab !== 'stats') {
+                    setActiveEditModule('stats', { force: true, skipSelect: true, silent: true });
+                }
+            }
             if (restoredState.selectedMediaKey) {
                 const mediaPanel = workspace.querySelector('[data-edit-module="media"]');
                 if (mediaPanel) {
@@ -12215,6 +15238,7 @@ console.log('Droi generated game:', GAME_TITLE);`
                 const previewUrl = previewFrame.src || previewFrame.dataset.previewUrl || '';
                 previewFrame.removeAttribute('loading');
                 previewFrame.dataset.previewUrl = previewUrl;
+                previewFrame.removeAttribute('src');
                 previewFrame.srcdoc = projectHtml;
             }
             const restartBtn = container.querySelector('[data-game-action="restart"]');
@@ -12234,12 +15258,36 @@ console.log('Droi generated game:', GAME_TITLE);`
                 previewFrame.src = previewFrame.src;
             });
             if (pauseBtn) {
-                pauseBtn.textContent = 'Focus';
+                pauseBtn.textContent = 'Start';
                 pauseBtn.addEventListener('click', () => previewFrame.focus());
             }
             previewButtons.forEach(previewButton => {
                 previewButton.addEventListener('click', () => {
                     openGeneratedPlayablePage(container, plan, previewButton.dataset.previewUrl || previewFrame.dataset.previewUrl || previewFrame.src || '');
+                });
+            });
+            container.querySelectorAll('[data-preview-repair-action]').forEach(button => {
+                button.addEventListener('click', () => {
+                    const action = button.dataset.previewRepairAction || '';
+                    const workspace = container.querySelector('[data-game-workspace]');
+                    if (action === 'revert') {
+                        const projectKey = workspace && workspace.__projectKey;
+                        if (projectKey && window.DroiChat && window.DroiChat.versions) {
+                            const current = window.DroiChat.versions.currentVersion(projectKey);
+                            if (current && current > 1) {
+                                revertWorkspaceToVersion(workspace, plan, projectKey, current - 1);
+                                return;
+                            }
+                        }
+                    }
+                    const prompt = action === 'regenerate'
+                        ? 'Regenerate the preview so it paints a playable browser game, preserving the current concept and controls.'
+                        : 'Repair the preview rendering issue. Keep the same gameplay, but make the HTML5 Canvas visibly playable.';
+                    if (chatInputField) setChatInputValue(prompt, { focus: true, cursorToEnd: true, dispatch: true });
+                    if (workspace) {
+                        workspace.__userChangedGeneratedView = true;
+                        workspace.dataset.generatedView = 'chat';
+                    }
                 });
             });
             if (mobilePreviewToggle && playableShell) {
@@ -12255,12 +15303,36 @@ console.log('Droi generated game:', GAME_TITLE);`
             const setStageLabel = text => {
                 const label = container.querySelector('.workspace-stage-label strong');
                 if (label) label.textContent = text;
+                const workspace = container.querySelector('[data-game-workspace]');
+                const failed = /failed|blocked/i.test(text);
+                const playable = /verified|ready|loaded/i.test(text) && !failed;
+                if (workspace) {
+                    workspace.classList.toggle('is-preview-failed', failed);
+                    workspace.classList.toggle('is-preview-verified', playable);
+                }
+                const repairActions = container.querySelector('[data-preview-repair-actions]');
+                if (repairActions) repairActions.hidden = !failed;
+                const previewStatus = container.querySelector('.preview-play-head [data-preview-status]');
+                if (previewStatus) {
+                    if (playable) previewStatus.textContent = 'Playable verified';
+                    else if (failed) previewStatus.textContent = 'Preview failed';
+                    else previewStatus.textContent = text || 'Rendering';
+                }
             };
             const setPreviewDiagnostic = (message = '', visible = false) => {
                 const diagnostic = container.querySelector('[data-preview-layout-diagnostic]');
                 if (!diagnostic) return;
                 diagnostic.hidden = !visible;
                 diagnostic.textContent = visible ? message : '';
+            };
+            const setPreviewStatus = status => {
+                const workspace = container.querySelector('[data-game-workspace]');
+                if (!workspace) return;
+                workspace.dataset.previewStatus = status;
+                workspace.dispatchEvent(new CustomEvent('workspace-preview-status-change', {
+                    bubbles: true,
+                    detail: { status }
+                }));
             };
             const sampleCanvasLooksPainted = canvas => {
                 if (!canvas || !canvas.width || !canvas.height) return false;
@@ -12304,11 +15376,13 @@ console.log('Droi generated game:', GAME_TITLE);`
                     doc = previewFrame.contentDocument || (previewFrame.contentWindow && previewFrame.contentWindow.document);
                 } catch (error) {
                     setStageLabel('Preview blocked');
+                    setPreviewStatus('blocked');
                     setPreviewDiagnostic('Preview iframe cannot be inspected. Open preview in a new tab to verify.', true);
                     return false;
                 }
                 if (!doc || !doc.body) {
                     setStageLabel('Preview failed');
+                    setPreviewStatus('failed');
                     setPreviewDiagnostic('Preview iframe loaded without a document body.', true);
                     return false;
                 }
@@ -12319,11 +15393,13 @@ console.log('Droi generated game:', GAME_TITLE);`
                 const visibleDom = Boolean(text && text.length > 8 && doc.body.getBoundingClientRect().height > 10);
                 if (paintedCanvas || (visibleDom && !fatalText)) {
                     setStageLabel('Playable preview verified');
+                    setPreviewStatus('verified');
                     setPreviewDiagnostic('', false);
                     return true;
                 }
                 const errorText = iframePreviewErrorLog.slice(-2).join(' | ');
                 setStageLabel('Preview render failed');
+                setPreviewStatus('failed');
                 setPreviewDiagnostic(errorText || 'Preview iframe loaded, but no painted canvas or visible game screen was detected.', true);
                 addWorkspaceSystemNotice(
                     container.querySelector('[data-game-workspace]'),
@@ -12421,8 +15497,15 @@ console.log('Droi generated game:', GAME_TITLE);`
             if (previewWorkspace) {
                 previewWorkspace.addEventListener('workspace-preview-visible', () => {
                     setPreviewDiagnostic('', false);
+                    if (previewFrame.__pendingVisibleReload) {
+                        previewFrame.__pendingVisibleReload = false;
+                        reloadSrcdocPreviewFrame(previewFrame);
+                    } else {
+                        nudgePreviewFrameLayout(previewFrame);
+                    }
                     window.setTimeout(validateIframePainted, 120);
                     window.setTimeout(validateIframePainted, 900);
+                    window.setTimeout(() => nudgePreviewFrameLayout(previewFrame), 300);
                     window.setTimeout(inspectIframeLayout, 240);
                 });
             }
@@ -13058,8 +16141,6 @@ console.log('Droi generated game:', GAME_TITLE);`
         const spec = bulletHellPlanState.confirmed && bulletHellPlanState.plan
             ? applyBulletHellPlanToGeneratedSpec(bulletHellPlanState.plan, getCurrentGameSpec())
             : getCurrentGameSpec();
-        const generationPlan = buildGenerationPlan(spec);
-        latestGenerationPlan = generationPlan;
         savedPrompt = `Your Concept: ${spec.background}
 Game Type: ${spec.gameType}
 Art Style: ${spec.artStyle}
@@ -13087,6 +16168,12 @@ HTML5 Constraints: Canvas, playable, responsive, no external dependencies, singl
 
             // Move progress bar into chat
             progressContainer.style.display = 'flex';
+            if (progressText) progressText.textContent = '0%';
+            if (progressBarFill) progressBarFill.style.width = '0%';
+            if (progressMessage) {
+                progressMessage.style.display = 'block';
+                progressMessage.textContent = 'Preparing AI generation...';
+            }
             chatHistory.appendChild(progressContainer);
 
             // Ensure scroll to see the progress bar
@@ -13094,8 +16181,24 @@ HTML5 Constraints: Canvas, playable, responsive, no external dependencies, singl
                 chatHistory.scrollTop = chatHistory.scrollHeight;
             }, 100);
 
-            // Start animation
-            runGenerationAnimation(generationPlan);
+            (async () => {
+                try {
+                    await prepareModelStagesBeforeGeneration(spec);
+                    const generationPlan = buildGenerationPlan(spec, latestGamePlan);
+                    latestGenerationPlan = generationPlan;
+                    runGenerationAnimation(generationPlan);
+                } catch (error) {
+                    const classified = classifyAIFlowError(error, 'Generation setup');
+                    if (progressContainer) progressContainer.style.display = 'none';
+                    chatHistory.classList.remove('is-generating');
+                    const inputArea = document.querySelector('.chat-input-wrapper');
+                    if (inputArea) inputArea.style.display = '';
+                    showAIFlowError(classified, {
+                        phase: 'Generation setup',
+                        onRetry: composeAndReturn
+                    });
+                }
+            })();
         }, 1200);
     }
 
@@ -13162,6 +16265,7 @@ HTML5 Constraints: Canvas, playable, responsive, no external dependencies, singl
             capability: null,
             analysisModelMeta: null,
             finalModelMeta: null,
+            flowMode: null,
             followUpCount: 0,
             workStartedAt: 0,
             aiRecommendationSnapshot: createAIRecommendationSnapshot(),
@@ -13194,7 +16298,7 @@ HTML5 Constraints: Canvas, playable, responsive, no external dependencies, singl
 
     function openChatView() {
         setHomeViewVisible(false);
-        inspireView.style.display = 'flex';
+        if (inspireView) inspireView.style.display = 'flex';
 
         if (successStateContainer) successStateContainer.style.display = 'none';
         if (form) form.style.display = 'flex';
@@ -13205,14 +16309,13 @@ HTML5 Constraints: Canvas, playable, responsive, no external dependencies, singl
     function openInspireView() {
         openChatView();
 
-        // Initial chat flow
         regTimeout(() => {
             addBotMessage(t('initial'), () => {
                 regTimeout(() => {
-                addUserMessage(t('inspire'));
-                regTimeout(() => {
-                    renderInspireModeChoice(1);
-                }, 800);
+                    addUserMessage(t('inspire'));
+                    regTimeout(() => {
+                        startGuidedGameSpecWizard();
+                    }, 800);
                 }, 350);
             });
         }, 400);
@@ -13221,7 +16324,7 @@ HTML5 Constraints: Canvas, playable, responsive, no external dependencies, singl
     function openCreateChatView(prompt) {
         openChatView();
         setChatLanguageFromText(prompt);
-        addUserMessage(prompt, { timelineOnly: true });
+        addUserMessage(prompt);
         startAnalysisFlow(prompt);
         regTimeout(() => { if (chatInputField) chatInputField.focus(); }, 500);
     }
@@ -13230,9 +16333,7 @@ HTML5 Constraints: Canvas, playable, responsive, no external dependencies, singl
         'roguelike-stage1': 'Generate a playable Roguelike survival game where a hero explores random rooms, fights waves of enemies, collects XP, chooses upgrades, and tries to defeat a final boss.'
     };
 
-    function openEditWorkspaceDemo() {
-        openChatView();
-        chatLanguage = 'en';
+    function buildEditWorkspaceDemoPlan() {
         const spec = {
             gameType: 'Bullet Hell / Flying Shooter',
             artStyle: 'Cozy Animal Island / Warm Rounded Paper-Cut UI',
@@ -13249,6 +16350,170 @@ HTML5 Constraints: Canvas, playable, responsive, no external dependencies, singl
                 exportProjectFolder: true
             }
         };
+        const generatedSpec = {
+            meta: {
+                gameName: 'Bloom Drift',
+                gameType: 'bullet-hell-flying-shooter',
+                version: 'p0-preview',
+                description: spec.background,
+                templateConfidence: 0.95,
+                sourceArchitectures: ['ai-direct-local-preview'],
+                generatedAt: new Date().toISOString()
+            },
+            template: {
+                id: 'ai_direct',
+                label: 'AI direct',
+                genre: 'bullet-hell',
+                confidence: 0.95,
+                matchReason: 'Debug workspace demo uses a deterministic local AI direct seed.'
+            },
+            engine: {
+                renderer: 'canvas',
+                fixedDeltaTime: 1 / 60,
+                maxEntityCount: 800,
+                mapSize: { width: 960, height: 540 }
+            },
+            settings: {
+                durationSeconds: 180,
+                difficulty: 'Normal'
+            },
+            userSpec: spec,
+            world: {
+                viewportWidth: 960,
+                viewportHeight: 540,
+                theme: 'cozy animal island sky village'
+            },
+            gameplay: {
+                coreLoop: spec.coreGameplay,
+                goal: spec.playerGoal,
+                challenge: spec.mainChallenge,
+                progression: spec.progressionSystem
+            },
+            ui: {
+                hud: ['score', 'lives', 'energy', 'wave'],
+                controls: ['Start', 'Restart', 'Open']
+            }
+        };
+        const demoHtml = [
+            '<!DOCTYPE html>',
+            '<html lang="en">',
+            '<head>',
+            '<meta charset="utf-8">',
+            '<meta name="viewport" content="width=device-width, initial-scale=1">',
+            '<title>Bloom Drift Demo</title>',
+            '<style>',
+            'html,body{margin:0;width:100%;height:100%;overflow:hidden;background:#0B0D12;color:#E8EAF0;font-family:Inter,system-ui,sans-serif;}',
+            '#game{display:block;width:100vw;height:100vh;background:#0E1117;}',
+            '</style>',
+            '</head>',
+            '<body>',
+            '<canvas id="game" width="960" height="540" aria-label="Bloom Drift playable canvas"></canvas>',
+            '<script>',
+            '(function(){',
+            'const canvas=document.getElementById("game");',
+            'const ctx=canvas.getContext("2d");',
+            'let running=false,score=0,wave=1,t=0;',
+            'const player={x:480,y:420,r:15,lives:3,energy:70};',
+            'function resize(){const dpr=Math.max(1,window.devicePixelRatio||1);canvas.width=Math.floor(window.innerWidth*dpr);canvas.height=Math.floor(window.innerHeight*dpr);ctx.setTransform(dpr,0,0,dpr,0,0);}',
+            'function drawCloud(x,y,s){ctx.fillStyle="rgba(255,255,255,.18)";ctx.beginPath();ctx.arc(x,y,s,0,Math.PI*2);ctx.arc(x+s*.8,y+s*.1,s*.8,0,Math.PI*2);ctx.arc(x-s*.8,y+s*.2,s*.7,0,Math.PI*2);ctx.fill();}',
+            'function draw(){const w=window.innerWidth,h=window.innerHeight;t+=0.016;if(running)score+=1;ctx.clearRect(0,0,w,h);const g=ctx.createLinearGradient(0,0,0,h);g.addColorStop(0,"#151922");g.addColorStop(.55,"#0E1117");g.addColorStop(1,"#0B0D12");ctx.fillStyle=g;ctx.fillRect(0,0,w,h);for(let i=0;i<10;i++){drawCloud((i*180+t*18)% (w+180)-90,80+(i%4)*62,28+(i%3)*10);}ctx.fillStyle="#5EE7FF";ctx.beginPath();ctx.ellipse(player.x/960*w,player.y/540*h,18,26,0,0,Math.PI*2);ctx.fill();ctx.fillStyle="#FFD166";ctx.beginPath();ctx.arc(player.x/960*w,player.y/540*h-16,7,0,Math.PI*2);ctx.fill();for(let i=0;i<32;i++){const a=i*.78+t*(running?1.8:.35);const cx=w/2+Math.cos(a)*(120+(i%5)*38);const cy=h/2+Math.sin(a*1.25)*(70+(i%6)*22);ctx.fillStyle=i%3?"#FF7AB6":"#9B8CFF";ctx.beginPath();ctx.arc(cx,cy,5+(i%4),0,Math.PI*2);ctx.fill();}ctx.fillStyle="rgba(255,255,255,.9)";ctx.font="700 16px system-ui";ctx.fillText("Score "+score,20,30);ctx.fillText("Lives "+player.lives,20,54);ctx.fillText("Energy "+player.energy+"%",20,78);ctx.fillText("Wave "+wave,20,102);if(!running){ctx.fillStyle="rgba(11,13,18,.58)";ctx.fillRect(0,0,w,h);ctx.fillStyle="#E8EAF0";ctx.font="800 28px system-ui";ctx.textAlign="center";ctx.fillText("Bloom Drift",w/2,h/2-18);ctx.font="600 15px system-ui";ctx.fillText("Click or press Space to start, P to pause, R to restart",w/2,h/2+18);ctx.textAlign="left";}requestAnimationFrame(draw);}',
+            'function restart(){score=0;wave=1;t=0;player.lives=3;player.energy=70;running=true;}',
+            'window.addEventListener("resize",resize);',
+            'window.addEventListener("keydown",e=>{if(e.code==="Space")running=true;if(e.key==="p"||e.key==="P")running=!running;if(e.key==="r"||e.key==="R")restart();});',
+            'canvas.addEventListener("click",()=>{running=true;});',
+            'resize();draw();',
+            '})();',
+            '</script>',
+            '</body>',
+            '</html>'
+        ].join('\n');
+        const validationReport = validateAIDirectHtml(demoHtml);
+        const project = normalizeGeneratedProject({
+            projectId: 'demo-edit-workspace',
+            title: 'Bloom Drift',
+            description: spec.background,
+            codeFiles: [
+                { path: 'index.html', content: demoHtml, language: 'html', kind: 'runtime' },
+                { path: 'spec/game.json', content: JSON.stringify(generatedSpec, null, 2), language: 'json', kind: 'spec' },
+                {
+                    path: 'assets/manifest.json',
+                    content: JSON.stringify({ generatedAt: new Date().toISOString(), assets: [], style: spec.artStyle }, null, 2),
+                    language: 'json',
+                    kind: 'manifest'
+                }
+            ],
+            generationReport: {
+                summary: 'Deterministic local demo project for PC generated workspace validation.',
+                runtimeArchitecture: {
+                    coreLocked: true,
+                    moduleRoot: 'runtime/modules',
+                    editableModules: ['runtime/modules/tuning.js'],
+                    forbiddenPaths: ['runtime/core/*']
+                },
+                capabilities: {
+                    supportsL1: true,
+                    supportsL2: true,
+                    supportsL3: true,
+                    supportsL4: true,
+                    numericControls: [
+                        { id: 'combat.fireRate', label: 'Fire Rate', min: 0.04, max: 0.22, defaultValue: 0.075, step: 0.005, unit: 's', helper: 'Auto-fire interval for the leaf-wing glider.' },
+                        { id: 'combat.enemySpeed', label: 'Enemy Bullet Speed', min: 90, max: 260, defaultValue: 170, step: 5, unit: 'px/s', helper: 'Pattern speed for readable bullet waves.' },
+                        { id: 'output.difficulty', label: 'Difficulty Curve', min: 1, max: 5, defaultValue: 3, step: 1, helper: 'Overall pressure for wave and boss pacing.' }
+                    ]
+                }
+            },
+            validationReport,
+            capabilities: {
+                supportsL1: true,
+                supportsL2: true,
+                supportsL3: true,
+                supportsL4: true
+            },
+            modelMeta: {
+                providerId: 'local',
+                modelId: 'workspace-demo',
+                label: 'Workspace demo'
+            },
+            generationMode: 'ai_direct',
+            projectMeta: {
+                title: 'Bloom Drift',
+                projectName: 'Bloom Drift',
+                description: spec.background,
+                englishDescription: spec.background,
+                coverImage: { url: '', status: 'preview_screenshot_pending' }
+            }
+        }, { generatedSpec }, generatedSpec, { providerId: 'local', modelId: 'workspace-demo', label: 'Workspace demo' }, 'ai_direct');
+        return {
+            decision: {
+                canAutoGenerate: true,
+                templateId: 'ai_direct',
+                templateLabel: 'AI direct',
+                templateGenre: 'bullet-hell-flying-shooter',
+                generationMode: 'ai_direct',
+                normalizedGameType: spec.gameType,
+                locked: false,
+                confidence: 0.95,
+                reason: 'Debug workspace demo uses a deterministic local AI direct project.'
+            },
+            productionPlan: null,
+            productionBrief: '',
+            generatedSpec,
+            generatedProject: project,
+            generationMode: 'ai_direct',
+            aiDirectGeneration: {
+                validationReport,
+                modelMeta: { providerId: 'local', modelId: 'workspace-demo', label: 'Workspace demo' }
+            }
+        };
+    }
+
+    let editWorkspaceDemoOpening = false;
+
+    function openEditWorkspaceDemo() {
+        if (editWorkspaceDemoOpening || document.querySelector('.generated-workspace-pc')) return;
+        editWorkspaceDemoOpening = true;
+        openChatView();
+        chatLanguage = 'en';
         analysisState.generationDecision = {
             templateId: 'ai_direct',
             confidence: 0.95,
@@ -13269,7 +16534,7 @@ HTML5 Constraints: Canvas, playable, responsive, no external dependencies, singl
             reason: 'Local demo uses warm rounded animal-island art direction.'
         };
         analysisState.capability = { supported: true, blockedReasons: [] };
-        const plan = buildGenerationPlan(spec);
+        const plan = buildEditWorkspaceDemoPlan();
         addUserMessage('Create a cozy animal-island bullet-hell flying shooter and open the post-generation editing workspace.');
         if (!plan.decision.canAutoGenerate) {
             regTimeout(() => {
@@ -13282,7 +16547,25 @@ HTML5 Constraints: Canvas, playable, responsive, no external dependencies, singl
         }
         regTimeout(() => {
             showAutoGenerationResult(plan);
+            editWorkspaceDemoOpening = false;
         }, 120);
+    }
+
+    function shouldOpenEditWorkspaceDemo(params = new URLSearchParams(window.location.search)) {
+        return isWorkspaceDemoModeEnabled(params) && (
+            params.get('demo') === 'edit-workspace'
+            || params.get('workspace') === 'edit'
+            || (window.location.port === '5502' && window.location.pathname === '/' && !window.location.search)
+        );
+    }
+
+    function scheduleEditWorkspaceDemoOpen(source = 'startup', delay = 120) {
+        const params = new URLSearchParams(window.location.search);
+        if (!shouldOpenEditWorkspaceDemo(params)) return false;
+        if (document.querySelector('.generated-workspace-pc') || editWorkspaceDemoOpening) return true;
+        recordDiagnostic('workspace-demo-open-scheduled', { source });
+        regTimeout(openEditWorkspaceDemo, delay);
+        return true;
     }
 
     async function openCreateChatViewAfterModelsReady(prompt) {
@@ -13291,7 +16574,28 @@ HTML5 Constraints: Canvas, playable, responsive, no external dependencies, singl
     }
 
     async function beginPromptGenerationFromHome(prompt) {
-        openCreateChatView(prompt);
+        const safePrompt = redactSensitiveText(prompt);
+        openChatView();
+        setChatLanguageFromText(safePrompt);
+        addUserMessage(safePrompt);
+        const pendingMessage = addBotMessage('', null, { pending: true, workType: 'thinking' });
+        const intent = await understandUserIntent(safePrompt, { source: 'home' });
+        if (pendingMessage) pendingMessage.remove();
+        if (shouldAutoContinueIntent(intent, 'home')) {
+            const routedPrompt = buildIntentContinuationPrompt(intent, safePrompt);
+            savedPrompt = routedPrompt;
+            startAnalysisFlow(routedPrompt);
+        } else {
+            showIntentSummaryCard(intent, {
+                sourcePrompt: safePrompt,
+                onUse: routedPrompt => {
+                    savedPrompt = routedPrompt;
+                    continueHomeIntent(intent, routedPrompt);
+                },
+                onStartOver: resetChat
+            });
+        }
+        regTimeout(() => { if (chatInputField) chatInputField.focus(); }, 500);
     }
 
     async function restoreActiveWorkspaceFromSnapshot() {
@@ -13324,15 +16628,11 @@ HTML5 Constraints: Canvas, playable, responsive, no external dependencies, singl
     const shouldAutoRunTestPrompt = startupParams.get('autorun') === '1'
         && startupTestPrompt
         && E2E_TEST_PROMPTS[startupTestPrompt];
-    const shouldAutoOpenWorkspaceDemo = isWorkspaceDemoModeEnabled(startupParams) && (
-        startupParams.get('demo') === 'edit-workspace'
-        || startupParams.get('workspace') === 'edit'
-        || (window.location.port === '5502' && window.location.pathname === '/' && !window.location.search)
-    );
+    const shouldAutoOpenWorkspaceDemo = shouldOpenEditWorkspaceDemo(startupParams);
     if (shouldAutoRunTestPrompt) {
         regTimeout(() => openCreateChatViewAfterModelsReady(E2E_TEST_PROMPTS[startupTestPrompt]), 300);
     } else if (shouldAutoOpenWorkspaceDemo) {
-        regTimeout(openEditWorkspaceDemo, 300);
+        scheduleEditWorkspaceDemoOpen('startup', 300);
     } else if (startupParams.get('restoreWorkspace') !== '0' && startupParams.get('noRestoreWorkspace') !== '1') {
         regTimeout(() => {
             restoreActiveWorkspaceFromSnapshot().catch(error => {
@@ -13342,6 +16642,9 @@ HTML5 Constraints: Canvas, playable, responsive, no external dependencies, singl
             });
         }, 450);
     }
+    window.addEventListener('load', () => {
+        scheduleEditWorkspaceDemoOpen('window-load', 0);
+    }, { once: true });
 
     // Event Listeners
     if (inspireEntryBtn) {
@@ -13812,14 +17115,14 @@ HTML5 Constraints: Canvas, playable, responsive, no external dependencies, singl
             resizeHomePromptInput();
 
             // Auto-save draft to prevent data loss
-            localStorage.setItem('droi_prompt_draft', this.value);
+            localStorage.setItem('droi_prompt_draft', redactSensitiveText(this.value));
         }
     });
 
     // Restore draft on load
     const savedDraft = localStorage.getItem('droi_prompt_draft');
     if (savedDraft && mainInput) {
-        mainInput.value = savedDraft;
+        mainInput.value = redactSensitiveText(savedDraft);
         resizeHomePromptInput();
     }
 
@@ -14012,14 +17315,57 @@ HTML5 Constraints: Canvas, playable, responsive, no external dependencies, singl
         }
 
         const progress = createGenerationProgressController();
+        const generationStartedAt = Date.now();
+        const cancelToken = { cancelled: false };
+        activeGenerationCancelToken = cancelToken;
         try {
             progress.start(t('progressAuto'));
+            activeGenerationWorkfeed = createChatWorkfeed({
+                id: `generation-${generationStartedAt}`,
+                type: 'generation',
+                title: 'Creating your game with the selected AI model',
+                subtitle: 'Using the confirmed GameSpec and backend validation signals.',
+                cancelable: true,
+                steps: [
+                    { id: 'request', label: 'Confirming GameSpec', status: 'running', summary: 'Using your confirmed task and selections.' },
+                    { id: 'generate', label: 'Generating playable files', status: 'queued', area: 'AI Direct' },
+                    { id: 'validate', label: 'Checking generated output', status: 'queued', area: 'Backend validation' },
+                    { id: 'preview', label: 'Preparing workspace preview', status: 'queued', area: 'Browser workspace' }
+                ],
+                onCancel: () => {
+                    if (cancelToken.cancelled) return;
+                    cancelToken.cancelled = true;
+                    cancelChatWorkfeed(activeGenerationWorkfeed, 'Generation canceled before the workspace was created.');
+                    addExecutionEvent('Generation canceled', 'warning', 'The active AI Direct request was canceled by the user.');
+                    if (progressContainer) progressContainer.style.display = 'none';
+                    chatHistory.classList.remove('is-generating');
+                    const inputArea = document.querySelector('.chat-input-wrapper');
+                    if (inputArea) inputArea.style.display = '';
+                }
+            });
+            progress.workfeedHandle = activeGenerationWorkfeed;
+            progress.cancelToken = cancelToken;
+            advanceChatWorkfeed(activeGenerationWorkfeed, 'request', { summary: 'GameSpec confirmed.' });
             latestGenerationPlan = plan;
             progress.completeStage('prepare');
-            await ensureTemplateProject(plan, getCurrentGameSpec(), progress);
+            await generateProjectByMode(plan, getCurrentGameSpec(), progress);
+            assertGenerationNotCancelled(cancelToken);
             const tDone = setTimeout(() => {
+                if (cancelToken.cancelled) return;
                 if (progressContainer) progressContainer.style.display = 'none';
-                showAutoGenerationResult(plan);
+                showAutoGenerationResult(plan, {
+                    onMounted: () => {
+                        updateChatWorkfeedStep(activeGenerationWorkfeed, 'preview', {
+                            status: 'done',
+                            summary: previewStatusFromProject(plan.generatedProject)
+                        });
+                        completeChatWorkfeed(
+                            activeGenerationWorkfeed,
+                            buildGenerationCompletionReceipt(plan, Date.now() - generationStartedAt),
+                            { onAction: handleCompletionReceiptAction }
+                        );
+                    }
+                });
                 progress.finish();
                 if (queuedGenerationInstructions.length) {
                     addExecutionEvent('Queued edits ready', 'queued', queuedGenerationInstructions.join('\n').slice(0, 1200), { open: true });
@@ -14027,7 +17373,17 @@ HTML5 Constraints: Canvas, playable, responsive, no external dependencies, singl
             }, 300);
             generationTimeouts.push(tDone);
         } catch (error) {
+            if (isGenerationCancelled(error) || cancelToken.cancelled) {
+                cancelChatWorkfeed(activeGenerationWorkfeed, 'Generation canceled before the workspace was created.');
+                if (progressContainer) progressContainer.style.display = 'none';
+                chatHistory.classList.remove('is-generating');
+                const inputArea = document.querySelector('.chat-input-wrapper');
+                if (inputArea) inputArea.style.display = '';
+                if (activeGenerationCancelToken === cancelToken) activeGenerationCancelToken = null;
+                return;
+            }
             const classified = progress.fail(error);
+            failChatWorkfeed(activeGenerationWorkfeed, 'generate', classified.message || classified.title || 'AI direct generation failed.');
             const tFail = setTimeout(() => {
                 if (progressContainer) progressContainer.style.display = 'none';
                 chatHistory.classList.remove('is-generating');
@@ -14039,12 +17395,14 @@ HTML5 Constraints: Canvas, playable, responsive, no external dependencies, singl
                 });
             }, 300);
             generationTimeouts.push(tFail);
+        } finally {
+            if (activeGenerationCancelToken === cancelToken && !cancelToken.cancelled) activeGenerationCancelToken = null;
         }
     }
 
     form.addEventListener('submit', async (e) => {
         e.preventDefault();
-        const inputValue = mainInput.value.trim();
+        const inputValue = redactSensitiveText(mainInput.value.trim());
 
         if (currentMode === 'prompt') {
             if (!inputValue) {

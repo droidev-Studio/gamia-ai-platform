@@ -11971,6 +11971,11 @@ body.game-edit-workspace-active .chat-input-wrapper {
 
 .generated-game-page .game-edit-tab .tab-lock-label {
     display: none;
+    font-size: 0.58rem;
+    font-weight: 800;
+    letter-spacing: 0;
+    text-transform: uppercase;
+    color: rgba(253, 230, 138, 0.9);
 }
 
 .generated-game-page.is-beginner-mode .game-edit-tab.advanced-only small,
@@ -11981,6 +11986,16 @@ body.game-edit-workspace-active .chat-input-wrapper {
 .generated-game-page.is-beginner-mode .game-edit-tab.advanced-only .tab-lock-label,
 .generated-game-page .game-edit-tab.is-locked .tab-lock-label {
     display: none !important;
+}
+
+.generated-game-page.is-advanced-mode .game-edit-tab.capability-locked .tab-lock-label,
+.generated-game-page.is-advanced-mode .game-edit-tab.is-readonly .tab-lock-label {
+    display: inline-flex !important;
+}
+
+.generated-game-page.is-advanced-mode .game-edit-tab.is-readonly {
+    border-color: rgba(96, 165, 250, 0.22) !important;
+    color: rgba(219, 234, 254, 0.86) !important;
 }
 
 .workspace-advanced-lock-hint {

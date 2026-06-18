@@ -128,16 +128,19 @@ const parentOrigin = (() => {
 
 const carouselDelay = 3500;
 const wheelSwitchUnlockMs = 180;
-const PUBLIC_API_BASE_URL = '';
+const PUBLIC_API_BASE_URL = 'https://droi-ai-backend-dev-585034669241.asia-east1.run.app';
 let wheelSwitchLocked = false;
 let wheelSwitchUnlockTimer = null;
+let backendGamesEnabled = false;
 
 function resolveApiBase() {
     const params = new URLSearchParams(window.location.search);
     const queryBase = params.get('apiBase') || '';
+    if (params.get('backendGames') === '1' || params.get('backendGames') === 'true') {
+        backendGamesEnabled = true;
+    }
     if (queryBase) return queryBase.replace(/\/$/, '');
     if (window.DROI_API_BASE) return String(window.DROI_API_BASE).replace(/\/$/, '');
-    if (['127.0.0.1', 'localhost'].includes(window.location.hostname)) return 'http://127.0.0.1:3000';
     return '';
 }
 
@@ -155,9 +158,12 @@ async function loadShowcaseRuntimeConfig() {
             return apiBase;
         }
     } catch (error) {
-        console.info('Showcase runtime config unavailable; backend-dependent cards remain disabled.', error);
+        console.info('Showcase runtime config unavailable; using public backend fallback.', error);
     }
-    apiBase = PUBLIC_API_BASE_URL;
+    if (!['127.0.0.1', 'localhost'].includes(window.location.hostname)) {
+        apiBase = PUBLIC_API_BASE_URL;
+        backendGamesEnabled = true;
+    }
     return apiBase;
 }
 
@@ -224,7 +230,7 @@ function syncCatalogGames() {
 }
 
 async function loadBackendGames() {
-    if (!apiBase) return;
+    if (!apiBase || !backendGamesEnabled) return;
     try {
         const response = await fetch(apiUrl('/api/showcase/games'), {
             credentials: 'include',

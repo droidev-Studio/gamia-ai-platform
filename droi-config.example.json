@@ -3,5 +3,5 @@
   "frontendContractVersion": "ai-direct-v1",
   "requiredBackendService": "droi-ai-direct-backend",
   "requiredGenerationMode": "ai_direct",
-  "apiBaseUrl": "https://YOUR_AI_DIRECT_BACKEND.example.com"
+  "apiBaseUrl": "https://droi-ai-direct-backend-585034669241.europe-west3.run.app"
 }

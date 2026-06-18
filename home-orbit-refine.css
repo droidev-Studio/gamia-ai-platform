@@ -3002,3 +3002,484 @@ html:not(.droi-force-intro-motion) body.gamia-scene-active::before {
   pointer-events: none !important;
   opacity: 0.45 !important;
 }
+
+/* ===== Chat graphite background guard ===== */
+body.gamia-scene-active:has(#inspireView:not([style*="display: none"]))::before {
+  display: none !important;
+  visibility: hidden !important;
+  opacity: 0 !important;
+  background-image: none !important;
+}
+
+body.gamia-scene-active:has(#inspireView:not([style*="display: none"])) .spotlight-overlay,
+body.gamia-scene-active:has(#inspireView:not([style*="display: none"])) .spotlight-glow,
+body.gamia-scene-active:has(#inspireView:not([style*="display: none"])) .starlight-container {
+  display: none !important;
+  visibility: hidden !important;
+  opacity: 0 !important;
+}
+
+body.gamia-scene-active:not(.game-edit-workspace-active) #inspireView.inspire-view {
+  background:
+    radial-gradient(ellipse at 50% -18%, rgba(255, 255, 255, 0.035), transparent 42%),
+    linear-gradient(180deg, #11131a 0%, #0c0e14 42%, #080a0f 100%) !important;
+}
+
+body.gamia-scene-active:not(.game-edit-workspace-active) #inspireView.inspire-view::before {
+  background:
+    linear-gradient(180deg, rgba(255, 255, 255, 0.018), rgba(0, 0, 0, 0.12)) !important;
+  opacity: 1 !important;
+}
+
+/* ===== Inspire chat: wider profile rail and simpler model picker ===== */
+@media (min-width: 981px) {
+  .inspire-view.has-profile-sidebar .chat-profile-sidebar {
+    right: clamp(1rem, 1.2vw, 1.5rem) !important;
+    width: clamp(390px, 23.5vw, 480px) !important;
+    max-width: calc(100vw - 2rem) !important;
+    padding: 0.2rem !important;
+  }
+
+  .inspire-view.has-profile-sidebar .chat-profile-sidebar .inspire-profile-card {
+    width: 100% !important;
+    box-sizing: border-box !important;
+  }
+
+  .inspire-view.has-profile-sidebar .profile-context-row {
+    grid-template-columns: 86px minmax(0, 1fr) !important;
+    gap: 0.7rem !important;
+  }
+
+  .inspire-view.has-profile-sidebar .profile-context-row strong {
+    white-space: normal !important;
+    overflow: visible !important;
+    text-overflow: clip !important;
+  }
+
+  .inspire-view.has-profile-sidebar .profile-sidebar-chip-grid {
+    display: grid !important;
+    grid-template-columns: repeat(auto-fit, minmax(118px, 1fr)) !important;
+    gap: 0.42rem !important;
+  }
+
+  .inspire-view.has-profile-sidebar .profile-sidebar-chip {
+    width: 100% !important;
+    justify-content: center !important;
+    min-width: 0 !important;
+    padding-inline: 0.62rem !important;
+  }
+}
+
+.chat-input-bar.unified-pill {
+  --composer-model-width: 122px !important;
+}
+
+.input-model-selector .model-selector {
+  width: var(--composer-model-width) !important;
+  min-width: var(--composer-model-width) !important;
+  max-width: var(--composer-model-width) !important;
+  padding-inline: 0.58rem !important;
+  gap: 0.26rem !important;
+}
+
+.input-model-selector .model-selector .model-icon {
+  display: none !important;
+}
+
+.input-model-selector .model-selector .model-name {
+  max-width: calc(var(--composer-model-width) - 30px) !important;
+  font-size: 0.8rem !important;
+  font-weight: 800 !important;
+}
+
+.input-model-selector .model-dropdown {
+  width: min(236px, calc(100vw - 1.5rem)) !important;
+  padding: 0.42rem !important;
+  border-radius: 12px !important;
+}
+
+.input-model-selector .model-dropdown-list {
+  gap: 0.28rem !important;
+}
+
+.input-model-selector .model-provider-group,
+.input-model-selector .model-provider-heading,
+.input-model-selector .model-provider-icon {
+  display: none !important;
+}
+
+.input-model-selector .model-option {
+  min-height: 36px !important;
+  padding: 0.52rem 0.66rem !important;
+  border-radius: 9px !important;
+  background: transparent !important;
+  gap: 0.5rem !important;
+}
+
+.input-model-selector .model-option span {
+  min-width: 0 !important;
+  overflow: hidden !important;
+  text-overflow: ellipsis !important;
+  white-space: nowrap !important;
+}
+
+.input-model-selector .model-option small {
+  display: inline-flex !important;
+  align-items: center !important;
+  justify-content: center !important;
+  width: 1.15rem !important;
+  height: 1.15rem !important;
+  margin-left: auto !important;
+  border-radius: 50% !important;
+  color: #fff !important;
+  background: color-mix(in srgb, var(--model-color, #a482ff) 36%, rgba(255, 255, 255, 0.08)) !important;
+  font-size: 0.74rem !important;
+  line-height: 1 !important;
+}
+
+.input-model-selector .model-option[aria-selected="true"] {
+  color: #fff !important;
+  background: color-mix(in srgb, var(--model-color, #a482ff) 18%, rgba(255, 255, 255, 0.055)) !important;
+}
+
+@media (max-width: 640px) {
+  .chat-input-bar.unified-pill {
+    --composer-model-width: 98px !important;
+  }
+
+  .input-model-selector .model-selector .model-name {
+    max-width: calc(var(--composer-model-width) - 28px) !important;
+    font-size: 0.72rem !important;
+  }
+}
+
+@media (max-width: 420px) {
+  .chat-input-bar.unified-pill {
+    --composer-model-width: 82px !important;
+  }
+
+  .input-model-selector .model-selector .model-name {
+    max-width: calc(var(--composer-model-width) - 26px) !important;
+  }
+}
+
+/* ===== Generated preview playability guard ===== */
+body.game-edit-workspace-active .generated-game-page[data-generated-view="preview"] .game-preview-viewport,
+body.game-edit-workspace-active .generated-game-page[data-generated-view="preview"] .template-preview-frame,
+body.game-edit-workspace-active .generated-game-page[data-generated-view="preview"] .game-preview-canvas {
+  pointer-events: auto !important;
+}
+
+body.game-edit-workspace-active .generated-game-page[data-generated-view="preview"] .template-preview-frame {
+  cursor: pointer !important;
+}
+
+/* ===== PC preview width: match the generated Chat column ===== */
+@media (min-width: 1181px) {
+  body.game-edit-workspace-active:has(.generated-game-page[data-generated-view="preview"]) {
+    --workspace-chat-column-width: min(980px, calc(100vw - 840px));
+  }
+
+  body.game-edit-workspace-active .generated-game-page[data-generated-view="preview"] .generated-main-header {
+    width: var(--workspace-chat-column-width) !important;
+    max-width: var(--workspace-chat-column-width) !important;
+    min-width: 0 !important;
+    margin-left: auto !important;
+    margin-right: auto !important;
+    padding-left: 0 !important;
+    padding-right: 0 !important;
+    grid-template-columns: minmax(0, 1fr) auto auto !important;
+    align-items: center !important;
+  }
+
+  body.game-edit-workspace-active .generated-game-page[data-generated-view="preview"] .workspace-header-actions {
+    justify-self: end !important;
+  }
+
+  body.game-edit-workspace-active .generated-game-page[data-generated-view="preview"] .generated-view-switch {
+    justify-self: end !important;
+  }
+
+  body.game-edit-workspace-active .generated-game-page[data-generated-view="preview"] .workspace-stage-toolbar,
+  body.game-edit-workspace-active .generated-game-page[data-generated-view="preview"] .generated-preview-view.playable-preview-card,
+  body.game-edit-workspace-active .generated-game-page[data-generated-view="preview"] .game-preview-viewport {
+    width: var(--workspace-chat-column-width) !important;
+    max-width: var(--workspace-chat-column-width) !important;
+    min-width: 0 !important;
+    margin-left: auto !important;
+    margin-right: auto !important;
+  }
+
+  body.game-edit-workspace-active .generated-game-page[data-generated-view="preview"] .generated-preview-view.playable-preview-card {
+    align-items: center !important;
+    justify-items: center !important;
+  }
+
+  body.game-edit-workspace-active:has(.generated-game-page[data-generated-view="preview"][data-preview-layout="landscape"]) .generated-game-page[data-generated-view="preview"] .generated-main-header {
+    width: var(--workspace-chat-column-width) !important;
+    max-width: var(--workspace-chat-column-width) !important;
+    min-width: 0 !important;
+    margin-left: auto !important;
+    margin-right: auto !important;
+    padding-left: 0 !important;
+    padding-right: 0 !important;
+    grid-template-columns: minmax(0, 1fr) auto auto !important;
+    align-items: center !important;
+  }
+
+  body.game-edit-workspace-active:has(.generated-game-page[data-generated-view="preview"][data-preview-layout="landscape"]) .generated-game-page[data-generated-view="preview"] .workspace-stage-toolbar,
+  body.game-edit-workspace-active:has(.generated-game-page[data-generated-view="preview"][data-preview-layout="landscape"]) .generated-game-page[data-generated-view="preview"] .generated-preview-view.playable-preview-card,
+  body.game-edit-workspace-active:has(.generated-game-page[data-generated-view="preview"][data-preview-layout="landscape"]) .generated-game-page[data-generated-view="preview"] .game-preview-viewport {
+    width: var(--workspace-chat-column-width) !important;
+    max-width: var(--workspace-chat-column-width) !important;
+    min-width: 0 !important;
+    margin-left: auto !important;
+    margin-right: auto !important;
+  }
+}
+
+/* ===== Mobile preview drawer recovery ===== */
+@media (max-width: 1180px), (hover: none) and (pointer: coarse) and (max-width: 1366px) {
+  body.game-edit-workspace-active:has(.generated-game-page[data-generated-view="preview"]) .generated-game-page .change-history-sidebar,
+  body.game-edit-workspace-active:has(.generated-game-page[data-generated-view="preview"]) .generated-game-page .game-edit-sidebar,
+  body.game-edit-workspace-active:has(.generated-game-page[data-generated-view="preview"][data-preview-layout="landscape"]) .generated-game-page .change-history-sidebar,
+  body.game-edit-workspace-active:has(.generated-game-page[data-generated-view="preview"][data-preview-layout="landscape"]) .generated-game-page .game-edit-sidebar {
+    display: block !important;
+    position: fixed !important;
+    top: max(0.75rem, calc(env(safe-area-inset-top, 0px) + 0.75rem)) !important;
+    bottom: max(5.85rem, calc(env(safe-area-inset-bottom, 0px) + 5.85rem)) !important;
+    z-index: 2147482000 !important;
+    width: min(86vw, 360px) !important;
+    max-width: calc(100vw - 64px) !important;
+    height: auto !important;
+    opacity: 0 !important;
+    visibility: hidden !important;
+    pointer-events: none !important;
+  }
+
+  body.game-edit-workspace-active:has(.generated-game-page[data-generated-view="preview"]) .generated-game-page .change-history-sidebar.open,
+  body.game-edit-workspace-active:has(.generated-game-page[data-generated-view="preview"]) .generated-game-page .game-edit-sidebar.open,
+  body.game-edit-workspace-active:has(.generated-game-page[data-generated-view="preview"][data-preview-layout="landscape"]) .generated-game-page .change-history-sidebar.open,
+  body.game-edit-workspace-active:has(.generated-game-page[data-generated-view="preview"][data-preview-layout="landscape"]) .generated-game-page .game-edit-sidebar.open {
+    opacity: 1 !important;
+    visibility: visible !important;
+    pointer-events: auto !important;
+    transform: translate3d(0, 0, 0) !important;
+  }
+
+  body.game-edit-workspace-active .mobile-workspace-drawer-toggle {
+    display: inline-flex !important;
+    visibility: visible !important;
+    opacity: 1 !important;
+    z-index: 2147483000 !important;
+    pointer-events: auto !important;
+  }
+}
+
+/* ===== Compact preview safe fit: keep controls and gameplay separated ===== */
+@media (max-width: 1180px), (hover: none) and (pointer: coarse) and (max-width: 1366px) {
+  body.game-edit-workspace-active:has(.playable-shell.preview-open) {
+    overflow: hidden !important;
+  }
+
+  body.game-edit-workspace-active:has(.generated-game-page[data-generated-view="preview"]) .chat-input-wrapper {
+    display: none !important;
+  }
+
+  body.game-edit-workspace-active .generated-game-page[data-generated-view="preview"],
+  body.game-edit-workspace-active .generated-game-page[data-generated-view="preview"] .workspace-body,
+  body.game-edit-workspace-active .generated-game-page[data-generated-view="preview"] .game-preview-column,
+  body.game-edit-workspace-active .generated-game-page[data-generated-view="preview"] .playable-shell {
+    width: 100vw !important;
+    max-width: 100vw !important;
+    min-width: 0 !important;
+    height: calc(100dvh - 58px) !important;
+    min-height: calc(100dvh - 58px) !important;
+    max-height: calc(100dvh - 58px) !important;
+    margin: 0 !important;
+    padding: 0 !important;
+    overflow: hidden !important;
+  }
+
+  body.game-edit-workspace-active .generated-game-page[data-generated-view="preview"] {
+    margin-left: calc(50% - 50vw) !important;
+    margin-right: calc(50% - 50vw) !important;
+    border-left: 0 !important;
+    border-right: 0 !important;
+    border-radius: 0 !important;
+  }
+
+  body.game-edit-workspace-active .generated-game-page[data-generated-view="preview"] .playable-shell.preview-open .generated-preview-view.playable-preview-card {
+    display: grid !important;
+    grid-template-rows: auto minmax(0, 1fr) !important;
+    grid-template-columns: minmax(0, 1fr) !important;
+    gap: 0.5rem !important;
+    align-items: stretch !important;
+    justify-items: stretch !important;
+    width: 100vw !important;
+    max-width: 100vw !important;
+    height: calc(100dvh - 58px) !important;
+    min-height: calc(100dvh - 58px) !important;
+    max-height: calc(100dvh - 58px) !important;
+    margin: 0 !important;
+    padding: 0.58rem 0.5rem 0.62rem !important;
+    border-radius: 0 !important;
+    overflow: hidden !important;
+  }
+
+  body.game-edit-workspace-active .generated-game-page[data-generated-view="preview"] .workspace-stage-toolbar {
+    position: relative !important;
+    z-index: 2 !important;
+    grid-row: 1 !important;
+    display: grid !important;
+    grid-template-columns: minmax(0, 1fr) !important;
+    width: 100% !important;
+    max-width: 100% !important;
+    min-height: 36px !important;
+    height: auto !important;
+    margin: 0 !important;
+    padding: 0.22rem 0.28rem !important;
+    border-radius: 14px !important;
+    overflow: visible !important;
+  }
+
+  body.game-edit-workspace-active .generated-game-page[data-generated-view="preview"] .workspace-stage-label {
+    display: none !important;
+  }
+
+  body.game-edit-workspace-active .generated-game-page[data-generated-view="preview"] .workspace-stage-toolbar .game-preview-actions {
+    display: grid !important;
+    grid-template-columns: repeat(4, minmax(0, 1fr)) !important;
+    gap: 0.34rem !important;
+    width: 100% !important;
+    height: auto !important;
+    margin: 0 !important;
+    padding: 0 !important;
+  }
+
+  body.game-edit-workspace-active .generated-game-page[data-generated-view="preview"] .workspace-stage-toolbar .game-preview-btn {
+    min-width: 0 !important;
+    min-height: 30px !important;
+    padding: 0 0.42rem !important;
+    font-size: 0.66rem !important;
+    line-height: 1 !important;
+    white-space: nowrap !important;
+  }
+
+  body.game-edit-workspace-active .generated-game-page[data-generated-view="preview"] .game-preview-viewport {
+    position: relative !important;
+    z-index: 1 !important;
+    grid-row: 2 !important;
+    display: block !important;
+    width: 100% !important;
+    max-width: 100% !important;
+    min-width: 0 !important;
+    height: 100% !important;
+    min-height: 0 !important;
+    max-height: none !important;
+    aspect-ratio: auto !important;
+    margin: 0 !important;
+    overflow: hidden !important;
+    border-radius: 14px !important;
+  }
+
+  body.game-edit-workspace-active .generated-game-page[data-generated-view="preview"] .game-preview-canvas,
+  body.game-edit-workspace-active .generated-game-page[data-generated-view="preview"] .template-preview-frame {
+    display: block !important;
+    width: 100% !important;
+    max-width: none !important;
+    height: 100% !important;
+    min-height: 100% !important;
+    max-height: none !important;
+    aspect-ratio: auto !important;
+  }
+
+  body.game-edit-workspace-active:has(.playable-shell.preview-open) .generated-game-page[data-generated-view="preview"] .workspace-body,
+  body.game-edit-workspace-active:has(.playable-shell.preview-open) .generated-game-page[data-generated-view="preview"] .game-preview-column,
+  body.game-edit-workspace-active:has(.playable-shell.preview-open) .generated-game-page[data-generated-view="preview"] .playable-shell.generated-view-shell.preview-open {
+    box-sizing: border-box !important;
+    height: 100% !important;
+    min-height: 0 !important;
+    max-height: 100% !important;
+    padding: 0 !important;
+    margin: 0 !important;
+    overflow: hidden !important;
+  }
+
+  body.game-edit-workspace-active:has(.playable-shell.preview-open) .generated-game-page[data-generated-view="preview"] .playable-shell.generated-view-shell.preview-open .generated-preview-view.playable-preview-card {
+    box-sizing: border-box !important;
+    width: 100% !important;
+    max-width: 100% !important;
+    height: 100% !important;
+    min-height: 0 !important;
+    max-height: 100% !important;
+    margin: 0 !important;
+  }
+}
+
+/* ===== Compact landscape preview: remove the hidden chat row from play mode ===== */
+@media (max-width: 1180px), (hover: none) and (pointer: coarse) and (max-width: 1366px) {
+  body.game-edit-workspace-active:has(.generated-game-page[data-generated-view="preview"][data-preview-layout="landscape"]) .generated-game-page[data-generated-view="preview"][data-preview-layout="landscape"] .playable-shell.generated-view-shell.preview-open {
+    display: block !important;
+    grid-template-rows: none !important;
+    height: 100% !important;
+    min-height: 0 !important;
+    max-height: 100% !important;
+    padding: 0 !important;
+    overflow: hidden !important;
+  }
+
+  body.game-edit-workspace-active:has(.generated-game-page[data-generated-view="preview"][data-preview-layout="landscape"]) .generated-game-page[data-generated-view="preview"][data-preview-layout="landscape"] .game-preview-chat-panel {
+    display: none !important;
+  }
+
+  body.game-edit-workspace-active:has(.generated-game-page[data-generated-view="preview"][data-preview-layout="landscape"]) .generated-game-page[data-generated-view="preview"][data-preview-layout="landscape"] .playable-shell.preview-open .generated-preview-view.playable-preview-card {
+    display: grid !important;
+    grid-template-rows: auto minmax(0, 1fr) !important;
+    width: 100% !important;
+    max-width: 100% !important;
+    height: 100% !important;
+    min-height: 0 !important;
+    max-height: 100% !important;
+    margin: 0 !important;
+    padding: 0.58rem 0.5rem 0.62rem !important;
+    overflow: hidden !important;
+  }
+
+  body.game-edit-workspace-active:has(.generated-game-page[data-generated-view="preview"][data-preview-layout="landscape"]) .generated-game-page[data-generated-view="preview"][data-preview-layout="landscape"] .workspace-stage-toolbar {
+    grid-row: 1 !important;
+    margin: 0 !important;
+  }
+
+  body.game-edit-workspace-active:has(.generated-game-page[data-generated-view="preview"][data-preview-layout="landscape"]) .generated-game-page[data-generated-view="preview"][data-preview-layout="landscape"] .game-preview-viewport {
+    grid-row: 2 !important;
+    width: 100% !important;
+    max-width: 100% !important;
+    height: 100% !important;
+    min-height: 0 !important;
+    max-height: none !important;
+    aspect-ratio: auto !important;
+    margin: 0 !important;
+  }
+
+  body.game-edit-workspace-active:has(.generated-game-page[data-generated-view="preview"][data-preview-layout="landscape"]) .generated-game-page[data-generated-view="preview"][data-preview-layout="landscape"] .game-preview-canvas,
+  body.game-edit-workspace-active:has(.generated-game-page[data-generated-view="preview"][data-preview-layout="landscape"]) .generated-game-page[data-generated-view="preview"][data-preview-layout="landscape"] .template-preview-frame {
+    width: 100% !important;
+    height: 100% !important;
+    min-height: 100% !important;
+    max-height: none !important;
+    aspect-ratio: auto !important;
+  }
+}
+
+/* ===== Generation progress: remove duplicate guide rails ===== */
+.progress-container .progress-bar-bg {
+  background: transparent !important;
+  box-shadow: none !important;
+}
+
+.progress-container .progress-bar-bg::before,
+.progress-container .progress-bar-bg::after {
+  content: none !important;
+  display: none !important;
+}
