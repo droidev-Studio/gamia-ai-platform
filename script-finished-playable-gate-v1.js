@@ -6011,6 +6011,7 @@ Treat genre conventions as suggested, not confirmed, unless the user explicitly 
         if (code === 'INTERACTIVE_SELF_TEST_FAILED') return 'self_test';
         if (code.includes('REPAIR') || /repair/.test(message)) return 'repair_interaction';
         if (code.includes('INTERACTIVE') || /self[-\s]?test|start button|restart|input/.test(message)) return 'self_test';
+        if ((code === 'PROJECT_OWNER_MISMATCH' || code === 'PROJECT_NOT_FOUND') && /repair|self[-\s]?test|runtime|current generation step/.test(message)) return 'repair_interaction';
         if (code.includes('RENDER') || category === 'validation_failure' && /render|canvas|preview/.test(message)) return 'render_check';
         if (code.includes('VALIDATION') || /validation/.test(message)) return 'final_self_test';
         if (code.includes('STREAM')) return 'preview';
@@ -6397,12 +6398,13 @@ Treat genre conventions as suggested, not confirmed, unless the user explicitly 
         const gameplayLabel = getProjectGameplayForReceipt(plan);
         const tierLabel = String(deliveryTier || '').toLowerCase();
         const skippedText = skippedLabels.length ? skippedLabels.join(', ') : 'advanced finish stages';
+        const tierText = deliveryTier ? `${deliveryTier} delivery` : 'playable delivery';
         const summary = viewingPlayableDraft
             ? `Playable draft opened. Art/UI generation still needs recovery${skippedLabels.length ? `: ${skippedText}` : ''}.`
             : partialEnhancement
-                ? `${title} is playable now${styleLabel ? ` with ${styleLabel} art/UI` : ''}. Some advanced finish stages were skipped: ${skippedText}.`
+                ? `${title} is playable now as ${tierText}${styleLabel ? ` with ${styleLabel} art/UI` : ''}. Gameplay preserved: ${gameplayLabel}. Some advanced finish stages were skipped: ${skippedText}.`
             : interactiveReport && interactiveReport.ok === true
-                ? `${title} created as a finished playable game${styleLabel ? ` with ${styleLabel} art/UI` : ''}. Controls and restart passed self-tests.`
+                ? `${title} created as a ${tierText}${styleLabel ? ` with ${styleLabel} art/UI` : ''}. Gameplay preserved: ${gameplayLabel}. Controls and restart passed self-tests.`
                 : validationReport && validationReport.ok === false
                     ? 'The AI returned a project, but backend validation found issues to review.'
                     : 'The AI returned playable project files and the workspace was refreshed.';
@@ -9809,7 +9811,19 @@ Lock Game Type to "Bullet Hell / Flying Shooter" and genre to "bullet-hell".`
                 }
             })
         });
-        const data = await parseJsonResponse(response);
+        let data;
+        try {
+            data = await parseJsonResponse(response);
+        } catch (error) {
+            const classified = classifyAIFlowError(error, 'AI direct interaction repair');
+            classified.workfeedStep = 'repair_interaction';
+            updateExecutionEvent(repairEventId, {
+                status: 'failed',
+                title: 'Interaction repair request failed',
+                detail: classified.message || classified.technicalMessage || String(error && error.message || error || '')
+            });
+            throw classified;
+        }
         const repairedProject = normalizeGeneratedProject(data, latestGenerationPlan, spec, activeModel, 'ai_direct_repair');
         const validationReport = repairedProject.validationReport || validateAIDirectHtml(getAIDirectProjectHtml(repairedProject));
         updateExecutionEvent(repairEventId, {
