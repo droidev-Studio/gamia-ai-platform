@@ -5941,6 +5941,7 @@ Treat genre conventions as suggested, not confirmed, unless the user explicitly 
     }
 
     function getGenerationFailureWorkfeedStep(error = {}) {
+        if (error && error.workfeedStep) return String(error.workfeedStep);
         const code = String(error.code || error.data?.code || '').toUpperCase();
         const category = String(error.category || error.data?.category || '').toLowerCase();
         const message = `${error.message || ''} ${error.title || ''} ${error.technicalMessage || ''}`.toLowerCase();
@@ -6264,10 +6265,12 @@ Treat genre conventions as suggested, not confirmed, unless the user explicitly 
         const title = getProjectTitleForReceipt(project, plan);
         const styleLabel = getProjectStyleForReceipt(project, plan);
         const gameplayLabel = getProjectGameplayForReceipt(plan);
+        const tierLabel = String(deliveryTier || '').toLowerCase();
+        const skippedText = skippedLabels.length ? skippedLabels.join(', ') : 'optional polish';
         const summary = viewingPlayableDraft
-            ? `Playable draft opened. Art/UI generation still needs recovery${skippedLabels.length ? `: ${skippedLabels.join(', ')}` : ''}.`
+            ? `Playable draft opened. Art/UI generation still needs recovery${skippedLabels.length ? `: ${skippedText}` : ''}.`
             : partialEnhancement
-                ? `${title} created as an enhanced playable game${styleLabel ? ` with ${styleLabel} art/UI` : ''}. Some advanced polish was skipped${skippedLabels.length ? `: ${skippedLabels.join(', ')}` : ''}.`
+                ? `${title} is playable now${styleLabel ? ` with ${styleLabel} art/UI` : ''}. Some polish steps were skipped: ${skippedText}.`
             : interactiveReport && interactiveReport.ok === true
                 ? `${title} created as a finished playable game${styleLabel ? ` with ${styleLabel} art/UI` : ''}. Controls and restart passed self-tests.`
                 : validationReport && validationReport.ok === false
@@ -6277,22 +6280,23 @@ Treat genre conventions as suggested, not confirmed, unless the user explicitly 
             badge: 'Generated',
             title: viewingPlayableDraft
                 ? 'Playable draft opened in the workspace'
-                : partialEnhancement ? 'Enhanced game created in the workspace' : 'Game created in the workspace',
+                : partialEnhancement ? 'Playable game created with partial polish' : 'Finished game created in the workspace',
             summary,
             durationMs,
             changedAreas: [
-                viewingPlayableDraft ? 'Playable draft' : 'Playable runtime',
+                viewingPlayableDraft ? 'Playable draft' : partialEnhancement ? 'Playable core delivered' : 'Playable runtime',
                 `Game: ${title}`,
                 ...(styleLabel && !viewingPlayableDraft ? [`Art/UI: ${styleLabel}`] : []),
                 'Game rules',
                 'Project files',
-                ...(deliveryTier ? [`Delivery tier: ${deliveryTier}`] : [])
+                ...(deliveryTier ? [`Delivery tier: ${deliveryTier}`] : []),
+                ...(partialEnhancement && skippedLabels.length ? [`Skipped polish: ${skippedText}`] : [])
             ],
             preservedAreas: [
                 'Selected model',
                 `Gameplay: ${gameplayLabel}`,
                 'Browser-safe preview boundary',
-                ...(partialEnhancement && !viewingPlayableDraft ? ['Skipped advanced polish did not block delivery'] : []),
+                ...(partialEnhancement && !viewingPlayableDraft ? [`${tierLabel === 'core' ? 'Core playable' : 'Verified playable version'} stayed available while optional polish recovered`] : []),
                 ...(viewingPlayableDraft ? ['Art/UI recovery still required before finished delivery'] : [])
             ],
             previewStatus: previewStatusFromProject(project),
@@ -8943,8 +8947,10 @@ Lock Game Type to "Bullet Hell / Flying Shooter" and genre to "bullet-hell".`
         '  dispatchInput(input),',
         '  getState()',
         '};',
-        'getState() must return at least { status, tick, score, timer, player: { x, y }, canInteract }.',
-        'start/restart/dispatchInput must change state or the canvas within 1000ms.'
+        'getState() must return a general state object such as { status, tick, canInteract, player?, signals?, capabilities? }.',
+        'Use signals for game-specific proof, for example { score?, timer?, progress?, lives?, objective?, custom? }.',
+        'Do not invent score or timer when the game does not use them; capabilities should say which signals exist.',
+        'start/restart/dispatchInput must change at least one observable signal, state field, player position, objective/progress value, custom signal, or the canvas within 1000ms.'
     ].join('\n');
 
     function validateAIDirectHtml(html) {
@@ -9141,31 +9147,105 @@ Lock Game Type to "Bullet Hell / Flying Shooter" and genre to "bullet-hell".`
         return new Promise(resolve => window.setTimeout(resolve, ms));
     }
 
+    function numberOrUndefined(value) {
+        const number = Number(value);
+        return Number.isFinite(number) ? number : undefined;
+    }
+
+    function hasOwnValue(object, key) {
+        return object && Object.prototype.hasOwnProperty.call(object, key) && object[key] != null;
+    }
+
+    function normalizeComparableValue(value, depth = 0) {
+        if (depth > 3) return '[depth-limit]';
+        if (value == null) return value;
+        if (typeof value === 'number') return Number.isFinite(value) ? value : String(value);
+        if (typeof value === 'string' || typeof value === 'boolean') return value;
+        if (Array.isArray(value)) {
+            return value.slice(0, 12).map(item => normalizeComparableValue(item, depth + 1));
+        }
+        if (typeof value === 'object') {
+            return Object.keys(value)
+                .sort()
+                .slice(0, 24)
+                .reduce((result, key) => {
+                    const normalized = normalizeComparableValue(value[key], depth + 1);
+                    if (typeof normalized !== 'function' && normalized !== undefined) {
+                        result[key] = normalized;
+                    }
+                    return result;
+                }, {});
+        }
+        return String(value);
+    }
+
+    function stableStateString(value) {
+        try {
+            return JSON.stringify(normalizeComparableValue(value));
+        } catch (error) {
+            return String(value);
+        }
+    }
+
+    function collectSignalValue(state, keys) {
+        for (const key of keys) {
+            if (hasOwnValue(state, key)) return state[key];
+        }
+        return undefined;
+    }
+
     function normalizeInteractiveState(state = {}) {
-        const player = state && state.player && typeof state.player === 'object' ? state.player : {};
+        const source = state && typeof state === 'object' ? state : {};
+        const player = source.player && typeof source.player === 'object' ? source.player : {};
+        const playerX = numberOrUndefined(hasOwnValue(player, 'x') ? player.x : source.playerX);
+        const playerY = numberOrUndefined(hasOwnValue(player, 'y') ? player.y : source.playerY);
+        const tick = numberOrUndefined(collectSignalValue(source, ['tick', 'frame', 'frames', 'turn', 'step']));
+        const signals = {
+            ...(source.signals && typeof source.signals === 'object' ? normalizeComparableValue(source.signals) : {})
+        };
+        const signalAliases = {
+            score: ['score', 'points', 'coins'],
+            timer: ['timer', 'time', 'timeLeft'],
+            progress: ['progress', 'levelProgress', 'completion'],
+            lives: ['lives', 'life', 'hp', 'health'],
+            objective: ['objective', 'goal', 'task', 'currentTask'],
+            combo: ['combo', 'streak'],
+            resources: ['resources', 'inventory'],
+            custom: ['custom', 'customSignal', 'gameSignal']
+        };
+        Object.entries(signalAliases).forEach(([signalKey, aliases]) => {
+            if (hasOwnValue(signals, signalKey)) return;
+            const value = collectSignalValue(source, aliases);
+            if (value !== undefined) signals[signalKey] = normalizeComparableValue(value);
+        });
         return {
-            status: String(state.status || state.phase || state.state || '').toLowerCase(),
-            tick: Number(state.tick || state.frame || state.frames || 0),
-            score: Number(state.score || state.points || 0),
-            timer: Number(state.timer || state.time || state.timeLeft || 0),
+            status: String(source.status || source.phase || source.state || '').toLowerCase(),
+            tick,
             player: {
-                x: Number(player.x || state.playerX || 0),
-                y: Number(player.y || state.playerY || 0)
+                x: playerX,
+                y: playerY
             },
-            canInteract: state.canInteract !== false
+            signals,
+            capabilities: normalizeComparableValue(source.capabilities && typeof source.capabilities === 'object' ? source.capabilities : {}),
+            canInteract: source.canInteract !== false
         };
     }
 
-    function statesDiffer(a = {}, b = {}) {
+    function getInteractiveStateDiff(a = {}, b = {}) {
         const left = normalizeInteractiveState(a);
         const right = normalizeInteractiveState(b);
-        return left.status !== right.status ||
-            left.tick !== right.tick ||
-            left.score !== right.score ||
-            left.timer !== right.timer ||
-            left.player.x !== right.player.x ||
-            left.player.y !== right.player.y ||
-            left.canInteract !== right.canInteract;
+        const changed = [];
+        if (left.status !== right.status) changed.push('status');
+        if (left.tick !== right.tick) changed.push('tick');
+        if (left.player.x !== right.player.x || left.player.y !== right.player.y) changed.push('player');
+        if (stableStateString(left.signals) !== stableStateString(right.signals)) changed.push('signals');
+        if (stableStateString(left.capabilities) !== stableStateString(right.capabilities)) changed.push('capabilities');
+        if (left.canInteract !== right.canInteract) changed.push('canInteract');
+        return changed;
+    }
+
+    function statesDiffer(a = {}, b = {}) {
+        return getInteractiveStateDiff(a, b).length > 0;
     }
 
     function canvasHashFromDocument(doc) {
@@ -9325,8 +9405,9 @@ Lock Game Type to "Bullet Hell / Flying Shooter" and genre to "bullet-hell".`
             const initialCanvas = canvasHashFromDocument(doc);
             const visibleText = String(doc.body.innerText || doc.body.textContent || '').trim();
             const hasCanvasElement = Boolean(doc.querySelector('canvas'));
-            const sourceHasHudText = /score|timer|time|goal|wave|hp|life|lives|restart|start|serve|order|target/i.test(visibleText || html);
-            report.hudVerified = sourceHasHudText || /score|timer|time|goal|wave|hp|life|lives|restart|start|serve|order|target/i.test(doc.body.textContent || html);
+            const hudPattern = /score|timer|time|goal|objective|progress|wave|hp|life|lives|restart|start|serve|order|target|task|customer|combo|move/i;
+            const sourceHasHudText = hudPattern.test(visibleText || html);
+            report.hudVerified = sourceHasHudText || hudPattern.test(doc.body.textContent || html);
             report.rendered = initialCanvas.ok || visibleText.length > 8 || report.hudVerified;
             report.canvas = initialCanvas;
             const bridge = win.__GAMIA_GAME__;
@@ -9366,22 +9447,31 @@ Lock Game Type to "Bullet Hell / Flying Shooter" and genre to "bullet-hell".`
             await waitForMs(800);
             const afterStartState = normalizeInteractiveState(await callRuntimeBridge(bridge, 'getState'));
             const afterStartCanvas = canvasHashFromDocument(doc);
-            const startChanged = statesDiffer(beforeState, afterStartState) || beforeCanvas.hash !== afterStartCanvas.hash;
+            const startDiff = getInteractiveStateDiff(beforeState, afterStartState);
+            const startChanged = startDiff.length > 0 || beforeCanvas.hash !== afterStartCanvas.hash;
             report.startVerified = startChanged || afterStartState.status === 'running';
             await callRuntimeBridge(bridge, 'dispatchInput', { key: 'ArrowRight', code: 'ArrowRight', type: 'keydown', direction: 'right' });
             await waitForMs(650);
             const afterInputState = normalizeInteractiveState(await callRuntimeBridge(bridge, 'getState'));
             const afterInputCanvas = canvasHashFromDocument(doc);
-            report.inputVerified = statesDiffer(afterStartState, afterInputState) || afterStartCanvas.hash !== afterInputCanvas.hash;
+            const inputDiff = getInteractiveStateDiff(afterStartState, afterInputState);
+            report.inputVerified = inputDiff.length > 0 || afterStartCanvas.hash !== afterInputCanvas.hash;
             await callRuntimeBridge(bridge, 'restart');
             await waitForMs(650);
             const afterRestartState = normalizeInteractiveState(await callRuntimeBridge(bridge, 'getState'));
             const afterRestartCanvas = canvasHashFromDocument(doc);
-            const restartChanged = statesDiffer(afterInputState, afterRestartState) || afterInputCanvas.hash !== afterRestartCanvas.hash;
+            const restartDiff = getInteractiveStateDiff(afterInputState, afterRestartState);
+            const restartChanged = restartDiff.length > 0 || afterInputCanvas.hash !== afterRestartCanvas.hash;
             const restartReady = ['idle', 'running'].includes(afterRestartState.status) && afterRestartState.canInteract !== false;
             report.restartVerified = restartChanged && restartReady;
             report.stateChanged = report.startVerified || report.inputVerified || report.restartVerified;
             report.status = afterRestartState.status || afterInputState.status || afterStartState.status || beforeState.status || '';
+            report.stateEvidence = {
+                startChanged: startDiff,
+                inputChanged: inputDiff,
+                restartChanged: restartDiff,
+                capabilities: afterInputState.capabilities || afterStartState.capabilities || beforeState.capabilities || {}
+            };
             report.ok = Boolean(report.rendered && bridgeComplete && report.startVerified && report.inputVerified && report.restartVerified && report.hudVerified && !report.fatalErrors.length);
             report.qualityTier = qualityTierFromInteractiveReport(report);
             return {
@@ -9506,6 +9596,7 @@ Lock Game Type to "Bullet Hell / Flying Shooter" and genre to "bullet-hell".`
         );
         error.interactiveReport = report;
         error.project = project;
+        error.workfeedStep = 'self_test';
         return error;
     }
 
