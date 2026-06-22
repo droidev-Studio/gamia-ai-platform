@@ -1111,3 +1111,95 @@ body.game-edit-workspace-active .generated-game-page.generated-workspace-pc[data
     margin-left: auto !important;
     margin-right: auto !important;
 }
+
+/* PC workspace refinement: center landscape preview and compact tools tabs. */
+@media (min-width: 1280px) {
+    body.game-edit-workspace-active .generated-game-page.generated-workspace-pc[data-generated-view="preview"] .generated-preview-view.playable-preview-card {
+        grid-template-rows: 58px auto minmax(0, 1fr) auto !important;
+        align-content: stretch !important;
+        justify-items: center !important;
+        padding-bottom: clamp(28px, 5dvh, 72px) !important;
+    }
+
+    body.game-edit-workspace-active .generated-game-page.generated-workspace-pc[data-generated-view="preview"] .workspace-stage-toolbar {
+        grid-row: 2 !important;
+        align-self: start !important;
+        margin-top: 16px !important;
+        margin-bottom: 0 !important;
+    }
+
+    body.game-edit-workspace-active .generated-game-page.generated-workspace-pc[data-preview-orientation="landscape"] .game-preview-viewport,
+    body.game-edit-workspace-active .generated-game-page.generated-workspace-pc[data-preview-layout="landscape"] .game-preview-viewport {
+        grid-row: 3 !important;
+        align-self: center !important;
+        justify-self: center !important;
+        transform: translateY(clamp(64px, 8dvh, 110px)) !important;
+        max-height: calc(100dvh - 300px) !important;
+    }
+
+    body.game-edit-workspace-active .generated-game-page.generated-workspace-pc[data-preview-orientation="portrait"] .game-preview-viewport,
+    body.game-edit-workspace-active .generated-game-page.generated-workspace-pc[data-preview-layout="portrait"] .game-preview-viewport {
+        transform: none !important;
+    }
+
+    body.game-edit-workspace-active .generated-game-page.generated-workspace-pc .game-edit-sidebar {
+        display: grid !important;
+        grid-template-rows: 58px auto minmax(0, 1fr) auto !important;
+        align-content: stretch !important;
+    }
+
+    body.game-edit-workspace-active .generated-game-page.generated-workspace-pc .game-edit-tabs {
+        display: grid !important;
+        grid-template-columns: repeat(4, minmax(0, 1fr)) !important;
+        align-items: center !important;
+        gap: 4px !important;
+        height: 38px !important;
+        min-height: 38px !important;
+        max-height: 38px !important;
+        margin: 10px 14px 8px !important;
+        padding: 4px !important;
+        border-radius: 12px !important;
+        background: rgba(8, 12, 24, 0.82) !important;
+        border: 1px solid rgba(232, 234, 240, 0.08) !important;
+        overflow: hidden !important;
+    }
+
+    body.game-edit-workspace-active .generated-game-page.generated-workspace-pc .game-edit-tab {
+        display: inline-flex !important;
+        align-items: center !important;
+        justify-content: center !important;
+        min-width: 0 !important;
+        width: 100% !important;
+        height: 28px !important;
+        min-height: 28px !important;
+        max-height: 28px !important;
+        padding: 0 6px !important;
+        border-radius: 9px !important;
+        border: 0 !important;
+        background: transparent !important;
+        color: rgba(232, 234, 240, 0.58) !important;
+        font-size: 11px !important;
+        font-weight: 850 !important;
+        line-height: 1 !important;
+        white-space: nowrap !important;
+        overflow: hidden !important;
+        text-overflow: ellipsis !important;
+    }
+
+    body.game-edit-workspace-active .generated-game-page.generated-workspace-pc .game-edit-tab.active {
+        color: var(--pc-text) !important;
+        background: linear-gradient(135deg, rgba(94, 231, 255, 0.28), rgba(139, 92, 246, 0.22)) !important;
+        box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.08) !important;
+    }
+
+    body.game-edit-workspace-active .generated-game-page.generated-workspace-pc .game-edit-tab small,
+    body.game-edit-workspace-active .generated-game-page.generated-workspace-pc .game-edit-tab .tab-lock-label {
+        display: none !important;
+    }
+
+    body.game-edit-workspace-active .generated-game-page.generated-workspace-pc .game-edit-module {
+        min-height: 0 !important;
+        overflow: auto !important;
+        margin-top: 0 !important;
+    }
+}

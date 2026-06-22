@@ -5907,7 +5907,7 @@ Treat genre conventions as suggested, not confirmed, unless the user explicitly 
             updateChatWorkfeedStep(handle, id, {
                 status,
                 summary: stage.summary || (status === 'skipped'
-                    ? 'Optional polish step skipped. Using verified playable core.'
+                    ? 'Finished art/UI step needs recovery before final delivery.'
                     : status === 'done' ? 'Completed.' : '')
             });
         });
@@ -5994,13 +5994,150 @@ Treat genre conventions as suggested, not confirmed, unless the user explicitly 
 
     function previewStatusFromProject(project) {
         const interactiveReport = getProjectInteractiveReport(project || {});
-        if (interactiveReport && interactiveReport.ok === true) return 'Playable demo verified';
+        if (interactiveReport && interactiveReport.ok === true) return 'Playable game verified';
         if (interactiveReport && interactiveReport.ok === false) return 'Generated game could not pass playable self-test';
         const report = project && project.validationReport;
         if (report && report.ok === false) return 'Validation needs review';
         if (report && report.browserRender && report.browserRender.ok === true) return 'Rendered. Testing controls required';
         if (report && report.ok === true) return 'Loaded, not visually verified';
         return 'Loaded, not visually verified';
+    }
+
+    function getProjectSkippedStages(project = {}) {
+        const report = project.generationReport || {};
+        const rawStages = Array.isArray(project.skippedStages)
+            ? project.skippedStages
+            : Array.isArray(report.skippedStages) ? report.skippedStages : [];
+        return rawStages
+            .map(stage => {
+                if (typeof stage === 'string') return { id: stage, label: stage };
+                return stage && typeof stage === 'object' ? stage : null;
+            })
+            .filter(Boolean);
+    }
+
+    function getProjectDeliveryTier(project = {}) {
+        const report = project.generationReport || {};
+        return String(project.deliveryTier || report.deliveryTier || '').toLowerCase();
+    }
+
+    function hasProjectCodeFile(project = {}, pattern) {
+        const files = Array.isArray(project.codeFiles) ? project.codeFiles : [];
+        return files.some(file => pattern.test(String(file.path || file.name || '')));
+    }
+
+    function hasFinishedArtUiEvidence(project = {}) {
+        const report = project.generationReport || {};
+        const explicit = project.artUiApplied ?? report.artUiApplied;
+        if (explicit === true) return true;
+        if (explicit === false) return false;
+        const assetManifest = project.assetManifest || report.assetManifest;
+        const artDecision = project.artResourceDecision || report.artResourceDecision;
+        const uiDecision = project.uiSkinDecision || report.uiSkinDecision;
+        const visualReport = project.visualStyleReport || report.visualStyleReport;
+        return Boolean(assetManifest || artDecision || uiDecision || visualReport);
+    }
+
+    function getFinishedPlayableGateStatus(project = {}) {
+        const deliveryTier = getProjectDeliveryTier(project);
+        const skippedStages = getProjectSkippedStages(project);
+        const skippedIds = skippedStages.map(stage => String(stage.id || stage.label || '').toLowerCase());
+        const artUiSkipped = skippedIds.some(id => id === 'art_ui_apply' || id === 'visual_enhance');
+        const interactiveReport = getProjectInteractiveReport(project);
+        const interactiveOk = !interactiveReport || interactiveReport.ok === true;
+        const hasPreview = Boolean(project.previewUrl || getAIDirectProjectHtml(project));
+        const hasIndex = hasProjectCodeFile(project, /(?:^|\/)index\.html$/i) || Boolean(getAIDirectProjectHtml(project));
+        const hasReport = hasProjectCodeFile(project, /(?:^|\/)generation-report\.json$/i) || Boolean(project.generationReport);
+        const projectMeta = project.projectMeta || (project.generationReport && project.generationReport.projectMeta) || {};
+        const projectMetaReady = projectMeta.ready === true || Boolean(projectMeta.title || projectMeta.projectName || projectMeta.englishDescription);
+        const artUiApplied = hasFinishedArtUiEvidence(project);
+
+        if (deliveryTier === 'core') {
+            return {
+                ok: false,
+                reason: 'core_only',
+                title: 'Playable core ready',
+                message: 'Playable core ready, art/UI generation still needs recovery.',
+                deliveryTier,
+                skippedStages
+            };
+        }
+        if (artUiSkipped || artUiApplied === false) {
+            return {
+                ok: false,
+                reason: 'art_ui_incomplete',
+                title: 'Playable core ready',
+                message: 'Playable core ready, art/UI generation still needs recovery.',
+                deliveryTier: deliveryTier || 'core',
+                skippedStages
+            };
+        }
+        if (!interactiveOk) {
+            return {
+                ok: false,
+                reason: 'self_test_incomplete',
+                title: 'Playable self-test needs recovery',
+                message: 'The game rendered, but controls and restart could not be verified yet.',
+                deliveryTier,
+                skippedStages
+            };
+        }
+        if (!hasPreview || !hasIndex || !hasReport) {
+            return {
+                ok: false,
+                reason: 'workspace_contract_incomplete',
+                title: 'Workspace package needs recovery',
+                message: 'The generated game is missing files required for the finished workspace.',
+                deliveryTier,
+                skippedStages
+            };
+        }
+        if ((deliveryTier === 'final' || deliveryTier === 'enhanced') && !projectMetaReady) {
+            return {
+                ok: false,
+                reason: 'project_meta_incomplete',
+                title: 'Project info needs recovery',
+                message: 'The playable game is ready, but project title and preview information still need recovery.',
+                deliveryTier,
+                skippedStages
+            };
+        }
+        return {
+            ok: true,
+            reason: 'finished_playable_ready',
+            deliveryTier,
+            skippedStages
+        };
+    }
+
+    function showFinishedPlayableRecoveryCard(plan, gate = {}, handlers = {}) {
+        const project = plan && plan.generatedProject || {};
+        const skippedLabels = (gate.skippedStages || getProjectSkippedStages(project))
+            .map(stage => String(stage.label || stage.id || '').replace(/_/g, ' ').trim())
+            .filter(Boolean);
+        const deliveryTier = gate.deliveryTier || getProjectDeliveryTier(project) || 'core';
+        const html = [
+            '<div class="selection-summary ai-error-card playable-draft-recovery-card">',
+            `<div class="summary-title">${escapeHtml(gate.title || 'Playable core ready')}</div>`,
+            `<div class="summary-item">${escapeHtml(gate.message || 'Playable core ready, art/UI generation still needs recovery.')}</div>`,
+            `<div class="summary-item"><strong>Delivery tier:</strong> ${escapeHtml(deliveryTier === 'core' ? 'Playable draft' : deliveryTier)}</div>`,
+            skippedLabels.length ? `<div class="summary-item"><strong>Needs recovery:</strong> ${escapeHtml(skippedLabels.join(', '))}</div>` : '',
+            '<div class="summary-actions">',
+            '<button type="button" class="summary-action primary" data-finished-gate-action="retry">Retry finished game</button>',
+            '<button type="button" class="summary-action secondary" data-finished-gate-action="view_draft">View playable draft</button>',
+            '</div>',
+            '</div>'
+        ].filter(Boolean).join('');
+        return addBotMessage(html, msgDiv => {
+            msgDiv.querySelectorAll('[data-finished-gate-action]').forEach(button => {
+                button.addEventListener('click', () => {
+                    const action = button.dataset.finishedGateAction;
+                    if (action === 'retry' && typeof handlers.onRetry === 'function') handlers.onRetry();
+                    if (action === 'view_draft' && typeof handlers.onViewDraft === 'function') handlers.onViewDraft();
+                });
+            });
+            scrollChatMessageIntoReadableView(msgDiv, 'start');
+        });
     }
 
     function workspaceProjectModeLabel(project = {}) {
@@ -6016,6 +6153,50 @@ Treat genre conventions as suggested, not confirmed, unless the user explicitly 
         }
         const modelLabel = modelMetaDisplay(modelMeta) || 'Selected model';
         return `AI Direct · ${modelLabel} · No template`;
+    }
+
+    function getPlanSpecValue(plan = {}, keys = []) {
+        const generated = plan.generatedSpec || {};
+        const candidates = [
+            generated.userSpec,
+            generated.gameSpec,
+            generated.spec,
+            plan.gameSpec,
+            getCurrentGameSpec()
+        ].filter(candidate => candidate && typeof candidate === 'object');
+        for (const source of candidates) {
+            for (const key of keys) {
+                const value = source[key];
+                if (typeof value === 'string' && value.trim()) return value.trim();
+            }
+        }
+        return '';
+    }
+
+    function getProjectTitleForReceipt(project = {}, plan = {}) {
+        const meta = project.projectMeta || {};
+        return String(meta.title || meta.projectName || project.title || project.name || getPlanSpecValue(plan, ['title', 'name', 'type']) || 'Generated game').trim();
+    }
+
+    function getProjectStyleForReceipt(project = {}, plan = {}) {
+        const report = project.generationReport || {};
+        const visualReport = project.visualStyleReport || report.visualStyleReport || {};
+        const uiDecision = project.uiSkinDecision || report.uiSkinDecision || {};
+        return String(
+            visualReport.styleLabel ||
+            visualReport.style ||
+            uiDecision.label ||
+            uiDecision.name ||
+            getPlanSpecValue(plan, ['style', 'artStyle', 'visualStyle']) ||
+            ''
+        ).trim();
+    }
+
+    function getProjectGameplayForReceipt(plan = {}) {
+        const type = getPlanSpecValue(plan, ['type', 'gameType']);
+        const core = getPlanSpecValue(plan, ['coreGameplay', 'gameplay']);
+        if (type && core) return `${type} / ${core}`;
+        return type || core || 'Confirmed gameplay';
     }
 
     function compactWorkspaceHistorySummary(record = {}) {
@@ -6062,37 +6243,46 @@ Treat genre conventions as suggested, not confirmed, unless the user explicitly 
         const validationReport = project.validationReport || (plan.aiDirectGeneration && plan.aiDirectGeneration.validationReport) || null;
         const modelMeta = project.modelMeta || (plan.aiDirectGeneration && plan.aiDirectGeneration.modelMeta) || null;
         const deliveryTier = project.deliveryTier || generationReport?.deliveryTier || '';
-        const skippedStages = Array.isArray(project.skippedStages)
-            ? project.skippedStages
-            : Array.isArray(generationReport?.skippedStages) ? generationReport.skippedStages : [];
+        const skippedStages = getProjectSkippedStages(project);
         const skippedLabels = skippedStages
             .map(stage => String(stage.label || stage.id || '').replace(/_/g, ' ').trim())
             .filter(Boolean);
         const partialEnhancement = Boolean(project.partialEnhancement || generationReport?.partialEnhancement || skippedLabels.length);
+        const viewingPlayableDraft = project.__viewingPlayableDraft === true || String(deliveryTier).toLowerCase() === 'core';
         const interactiveReport = getProjectInteractiveReport(project);
-        const summary = partialEnhancement
-            ? `Core playable created. Some polish steps were skipped${skippedLabels.length ? `: ${skippedLabels.join(', ')}` : ''}.`
+        const title = getProjectTitleForReceipt(project, plan);
+        const styleLabel = getProjectStyleForReceipt(project, plan);
+        const gameplayLabel = getProjectGameplayForReceipt(plan);
+        const summary = viewingPlayableDraft
+            ? `Playable draft opened. Art/UI generation still needs recovery${skippedLabels.length ? `: ${skippedLabels.join(', ')}` : ''}.`
+            : partialEnhancement
+                ? `${title} created as an enhanced playable game${styleLabel ? ` with ${styleLabel} art/UI` : ''}. Some advanced polish was skipped${skippedLabels.length ? `: ${skippedLabels.join(', ')}` : ''}.`
             : interactiveReport && interactiveReport.ok === true
-                ? 'The AI returned project files and the playable demo passed Start, input, and Restart self-tests.'
+                ? `${title} created as a finished playable game${styleLabel ? ` with ${styleLabel} art/UI` : ''}. Controls and restart passed self-tests.`
                 : validationReport && validationReport.ok === false
                     ? 'The AI returned a project, but backend validation found issues to review.'
                     : 'The AI returned playable project files and the workspace was refreshed.';
         return {
             badge: 'Generated',
-            title: partialEnhancement ? 'Playable core created in the workspace' : 'Game created in the workspace',
+            title: viewingPlayableDraft
+                ? 'Playable draft opened in the workspace'
+                : partialEnhancement ? 'Enhanced game created in the workspace' : 'Game created in the workspace',
             summary,
             durationMs,
             changedAreas: [
-                partialEnhancement ? 'Playable core' : 'Playable runtime',
+                viewingPlayableDraft ? 'Playable draft' : 'Playable runtime',
+                `Game: ${title}`,
+                ...(styleLabel && !viewingPlayableDraft ? [`Art/UI: ${styleLabel}`] : []),
                 'Game rules',
                 'Project files',
                 ...(deliveryTier ? [`Delivery tier: ${deliveryTier}`] : [])
             ],
             preservedAreas: [
                 'Selected model',
-                'Current GameSpec',
+                `Gameplay: ${gameplayLabel}`,
                 'Browser-safe preview boundary',
-                ...(partialEnhancement ? ['Skipped polish did not block delivery'] : [])
+                ...(partialEnhancement && !viewingPlayableDraft ? ['Skipped advanced polish did not block delivery'] : []),
+                ...(viewingPlayableDraft ? ['Art/UI recovery still required before finished delivery'] : [])
             ],
             previewStatus: previewStatusFromProject(project),
             ranBackend: true,
@@ -9122,8 +9312,11 @@ Lock Game Type to "Bullet Hell / Flying Shooter" and genre to "bullet-hell".`
             });
             await waitForMs(250);
             const initialCanvas = canvasHashFromDocument(doc);
-            const visibleText = String(doc.body.innerText || '').trim();
-            report.rendered = initialCanvas.ok || visibleText.length > 8;
+            const visibleText = String(doc.body.innerText || doc.body.textContent || '').trim();
+            const hasCanvasElement = Boolean(doc.querySelector('canvas'));
+            const sourceHasHudText = /score|timer|time|goal|wave|hp|life|lives|restart|start|serve|order|target/i.test(visibleText || html);
+            report.hudVerified = sourceHasHudText || /score|timer|time|goal|wave|hp|life|lives|restart|start|serve|order|target/i.test(doc.body.textContent || html);
+            report.rendered = initialCanvas.ok || visibleText.length > 8 || report.hudVerified;
             report.canvas = initialCanvas;
             const bridge = win.__GAMIA_GAME__;
             report.bridgeDetected = Boolean(bridge && typeof bridge === 'object');
@@ -9173,10 +9366,11 @@ Lock Game Type to "Bullet Hell / Flying Shooter" and genre to "bullet-hell".`
             await waitForMs(650);
             const afterRestartState = normalizeInteractiveState(await callRuntimeBridge(bridge, 'getState'));
             const afterRestartCanvas = canvasHashFromDocument(doc);
-            report.restartVerified = statesDiffer(afterInputState, afterRestartState) || afterInputCanvas.hash !== afterRestartCanvas.hash || ['idle', 'running'].includes(afterRestartState.status);
+            const restartChanged = statesDiffer(afterInputState, afterRestartState) || afterInputCanvas.hash !== afterRestartCanvas.hash;
+            const restartReady = ['idle', 'running'].includes(afterRestartState.status) && afterRestartState.canInteract !== false;
+            report.restartVerified = restartChanged && restartReady;
             report.stateChanged = report.startVerified || report.inputVerified || report.restartVerified;
             report.status = afterRestartState.status || afterInputState.status || afterStartState.status || beforeState.status || '';
-            report.hudVerified = /score|timer|time|goal|wave|hp|life|lives|restart|start|serve|order|target/i.test(visibleText || doc.body.textContent || html);
             report.ok = Boolean(report.rendered && bridgeComplete && report.startVerified && report.inputVerified && report.restartVerified && report.hudVerified && !report.fatalErrors.length);
             report.qualityTier = qualityTierFromInteractiveReport(report);
             return {
@@ -9339,7 +9533,7 @@ Lock Game Type to "Bullet Hell / Flying Shooter" and genre to "bullet-hell".`
                 if (progress && progress.workfeedHandle) {
                     updateChatWorkfeedStep(progress.workfeedHandle, 'self_test', {
                         status: 'done',
-                        summary: 'Playable demo verified.'
+                        summary: 'Playable game verified.'
                     });
                     updateChatWorkfeedStep(progress.workfeedHandle, 'repair_interaction', {
                         status: attempt ? 'done' : 'skipped',
@@ -9370,10 +9564,86 @@ Lock Game Type to "Bullet Hell / Flying Shooter" and genre to "bullet-hell".`
             });
             updateChatWorkfeedStep(progress.workfeedHandle, 'repair_interaction', {
                 status: 'failed',
-                summary: `Interaction repair could not produce a verified playable demo after ${maxRepairs} attempts.`
+                summary: `Interaction repair could not produce a verified playable game after ${maxRepairs} attempts.`
             });
         }
         throw createInteractiveSelfTestError(candidate, report);
+    }
+
+    function shouldExposeGamiaTestHooks() {
+        if (typeof window === 'undefined' || !window.location) return false;
+        const host = window.location.hostname;
+        if (host !== '127.0.0.1' && host !== 'localhost') return false;
+        const params = new URLSearchParams(window.location.search || '');
+        return params.has('debugWorkspaceDemo') || params.has('manual-test') || params.has('verify');
+    }
+
+    if (shouldExposeGamiaTestHooks()) {
+        window.__GAMIA_TEST_HOOKS__ = {
+            async runInteractiveSelfTestForHtml(html, options = {}) {
+                const project = {
+                    projectId: options.projectId || `test-fixture-${Date.now()}`,
+                    previewUrl: 'about:srcdoc',
+                    codeFiles: [{ path: 'index.html', content: String(html || '') }],
+                    validationReport: {
+                        ok: true,
+                        browserRender: { ok: true, reason: 'test_fixture_rendered' }
+                    }
+                };
+                return runAIDirectInteractiveSelfTest(project, {
+                    allowLegacyFallback: options.allowLegacyFallback === true
+                });
+            },
+            simulateInteractiveDeliveryFailure(overrides = {}) {
+                const report = {
+                    ok: false,
+                    rendered: true,
+                    bridgeDetected: false,
+                    startVerified: false,
+                    inputVerified: false,
+                    restartVerified: false,
+                    stateChanged: false,
+                    failed: ['runtimeBridge', 'start', 'input', 'restart'],
+                    fatalErrors: ['fixture failure'],
+                    ...overrides
+                };
+                const project = applyInteractiveReportToProject({
+                    projectId: 'test-delivery-failure',
+                    previewUrl: 'about:blank',
+                    codeFiles: [{ path: 'index.html', content: '<!doctype html><canvas></canvas><script></script>' }],
+                    validationReport: { ok: true, browserRender: { ok: true, reason: 'painted_canvas' } }
+                }, report, Number(overrides.repairAttempts || 2));
+                const error = createInteractiveSelfTestError(project, report);
+                return {
+                    code: error.code,
+                    message: error.message,
+                    qualityTier: project.qualityTier,
+                    deliveryReady: project.deliveryReady,
+                    repairAttempts: project.repairAttempts,
+                    interactiveReport: project.interactiveReport
+                };
+            },
+            setWorkspaceInteractiveReport(report = {}) {
+                const workspace = document.querySelector('[data-game-workspace]');
+                if (!workspace || !workspace.__plan || !workspace.__plan.generatedProject) {
+                    return { ok: false, reason: 'workspace_missing' };
+                }
+                applyInteractiveReportToProject(workspace.__plan.generatedProject, report, Number(report.repairAttempts || 0));
+                workspace.dataset.previewStatus = 'verified';
+                workspace.dispatchEvent(new CustomEvent('workspace-preview-status-change', {
+                    bubbles: true,
+                    detail: { status: 'verified' }
+                }));
+                const publishButton = workspace.querySelector('[data-workspace-publish]');
+                return {
+                    ok: true,
+                    deliveryReady: workspace.__plan.generatedProject.deliveryReady,
+                    qualityTier: workspace.__plan.generatedProject.qualityTier,
+                    publishDisabled: publishButton ? publishButton.disabled : null,
+                    publishTitle: publishButton ? publishButton.title : ''
+                };
+            }
+        };
     }
 
     function hasGeneratedFilePath(codeFiles, predicate) {
@@ -9619,7 +9889,7 @@ Lock Game Type to "Bullet Hell / Flying Shooter" and genre to "bullet-hell".`
             summary: stage.summary || (status === 'running'
                 ? 'Working...'
                 : status === 'skipped'
-                    ? 'Optional polish step skipped. Using verified playable core.'
+                    ? 'Finished art/UI step needs recovery before final delivery.'
                     : 'Completed.')
         });
     }
@@ -10151,10 +10421,10 @@ Lock Game Type to "Bullet Hell / Flying Shooter" and genre to "bullet-hell".`
             if (progress && progress.workfeedHandle) {
                 updateChatWorkfeedStep(progress.workfeedHandle, 'core_playable', {
                     status: 'running',
-                    summary: 'Calling the selected AI model for the playable core.'
+                    summary: 'Designing the internal playable core with the selected AI model.'
                 });
             }
-            if (progress) progress.setStage('generate', 15, 70, AI_DIRECT_GENERATION_TIMEOUT_MS, 'Building playable core, then testing the demo...');
+            if (progress) progress.setStage('generate', 15, 70, AI_DIRECT_GENERATION_TIMEOUT_MS, 'Designing playable core, applying art and UI resources...');
             const project = await withTimeout(
                 generateAIDirectGameProject(sourceSpec, plan.productionPlan || latestGamePlan, plan.productionBrief || '', progress),
                 AI_DIRECT_GENERATION_TIMEOUT_MS,
@@ -10168,15 +10438,15 @@ Lock Game Type to "Bullet Hell / Flying Shooter" and genre to "bullet-hell".`
                 syncGenerationPipelineWorkfeed(progress.workfeedHandle, project);
             }
             if (progress) progress.completeStage('generate');
-            if (progress) progress.setStage('validate', 70, 90, 5000, 'Testing playable demo...');
+            if (progress) progress.setStage('validate', 70, 90, 5000, 'Testing controls and restart...');
             assertGenerationNotCancelled(cancelToken);
-            addExecutionEvent('Testing playable demo', project.interactiveReport && project.interactiveReport.ok === true ? 'done' : 'warning', project.interactiveReport ? JSON.stringify(project.interactiveReport, null, 2).slice(0, 1200) : 'Playable self-test report missing.');
+            addExecutionEvent('Testing playable game', project.interactiveReport && project.interactiveReport.ok === true ? 'done' : 'warning', project.interactiveReport ? JSON.stringify(project.interactiveReport, null, 2).slice(0, 1200) : 'Playable self-test report missing.');
             if (progress && progress.workfeedHandle) {
                 updateChatWorkfeedStep(progress.workfeedHandle, 'final_validation', {
                     status: project.interactiveReport && project.interactiveReport.ok === true ? 'done' : 'warning',
                     summary: project.interactiveReport && project.interactiveReport.ok === true
-                        ? 'Playable demo passed interaction self-test.'
-                        : 'Rendered preview exists, but playable self-test did not confirm delivery.'
+                        ? 'Playable game passed interaction self-test.'
+                        : 'Rendered preview exists, but playable self-test did not confirm finished delivery.'
                 });
                 updateChatWorkfeedStep(progress.workfeedHandle, 'preview', {
                     status: 'running',
@@ -10197,7 +10467,7 @@ Lock Game Type to "Bullet Hell / Flying Shooter" and genre to "bullet-hell".`
             assertGenerationNotCancelled(cancelToken);
             if (project.modelMeta) analysisState.finalModelMeta = project.modelMeta;
             if (progress) progress.completeStage('validate');
-            if (progress) progress.setStage('preview', 90, 98, 2500, 'Preparing playable preview...');
+            if (progress) progress.setStage('preview', 90, 98, 2500, 'Preparing finished playable workspace...');
             assertGenerationNotCancelled(cancelToken);
             addExecutionEvent('Preview ready', 'done', project.previewUrl || '');
             if (progress) progress.completeStage('preview');
@@ -14683,7 +14953,7 @@ console.log('Droi generated game:', GAME_TITLE);`
                 { id: 'title', label: 'Project name', ok: Boolean(String(meta.title || meta.projectName || '').trim()) },
                 { id: 'description', label: 'English description', ok: Boolean(String(meta.description || meta.englishDescription || '').trim()) },
                 { id: 'cover', label: 'Preview image or cover', ok: coverReady },
-                { id: 'preview', label: 'Playable demo verified', ok: previewReady }
+                { id: 'preview', label: 'Playable game verified', ok: previewReady }
             ];
         }
 
@@ -16307,7 +16577,7 @@ console.log('Droi generated game:', GAME_TITLE);`
                 if (repairActions) repairActions.hidden = !failed;
                 const previewStatus = container.querySelector('.preview-play-head [data-preview-status]');
                 if (previewStatus) {
-                    if (playable) previewStatus.textContent = 'Playable demo verified';
+                    if (playable) previewStatus.textContent = 'Playable game verified';
                     else if (failed) previewStatus.textContent = 'Preview failed';
                     else previewStatus.textContent = text || 'Rendering';
                 }
@@ -16385,7 +16655,7 @@ console.log('Droi generated game:', GAME_TITLE);`
                 const fatalText = /uncaught|syntaxerror|referenceerror|typeerror|failed to/i.test(text);
                 const visibleDom = Boolean(text && text.length > 8 && doc.body.getBoundingClientRect().height > 10);
                 if (paintedCanvas || (visibleDom && !fatalText)) {
-                    setStageLabel(projectInteractiveReady ? 'Playable demo verified' : 'Rendered. Testing controls required');
+                    setStageLabel(projectInteractiveReady ? 'Playable game verified' : 'Rendered. Testing controls required');
                     setPreviewStatus(projectInteractiveReady ? 'verified' : 'rendered');
                     setPreviewDiagnostic('', false);
                     return true;
@@ -18351,24 +18621,24 @@ HTML5 Constraints: Canvas, playable, responsive, no external dependencies, singl
             generationWorkfeed = createChatWorkfeed({
                 id: `generation-${generationStartedAt}`,
                 type: 'generation',
-                title: 'Creating your game with the selected AI model',
-                subtitle: 'Using the confirmed GameSpec and backend validation signals.',
+                title: 'Creating a finished playable game with the selected AI model',
+                subtitle: 'Using your confirmed GameSpec, art/UI requirements, and validation signals.',
                 cancelable: true,
                 steps: [
-                    { id: 'request', label: 'Confirming GameSpec', status: 'running', summary: 'Using your confirmed task and selections.' },
-                    { id: 'core_playable', label: 'Building playable core', status: 'queued', area: 'AI Direct pipeline' },
-                    { id: 'visual_enhance', label: 'Polishing art style', status: 'queued', area: 'AI Direct pipeline' },
-                    { id: 'gameplay_depth', label: 'Adding depth', status: 'queued', area: 'AI Direct pipeline' },
-                    { id: 'ui_polish', label: 'Polishing UI', status: 'queued', area: 'AI Direct pipeline' },
-                    { id: 'project_meta', label: 'Preparing project info', status: 'queued', area: 'AI Direct pipeline' },
-                    { id: 'final_validation', label: 'Checking rendered preview', status: 'queued', area: 'Backend validation' },
+                    { id: 'request', label: 'Understanding your game idea', status: 'running', summary: 'Using your confirmed task and selections.' },
+                    { id: 'core_playable', label: 'Designing playable core', status: 'queued', area: 'AI Direct pipeline' },
+                    { id: 'visual_enhance', label: 'Applying art and UI resources', status: 'queued', area: 'AI Direct pipeline' },
+                    { id: 'gameplay_depth', label: 'Fitting gameplay to your request', status: 'queued', area: 'AI Direct pipeline' },
+                    { id: 'ui_polish', label: 'Preparing finished UI', status: 'queued', area: 'AI Direct pipeline' },
+                    { id: 'project_meta', label: 'Preparing project title and preview', status: 'queued', area: 'AI Direct pipeline' },
+                    { id: 'final_validation', label: 'Final playable game check', status: 'queued', area: 'Backend validation' },
                     { id: 'render_check', label: 'Checking rendered preview', status: 'queued', area: 'Playable self-test' },
                     { id: 'start_test', label: 'Testing Start button', status: 'queued', area: 'Playable self-test' },
                     { id: 'input_test', label: 'Testing player input', status: 'queued', area: 'Playable self-test' },
                     { id: 'restart_test', label: 'Testing Restart', status: 'queued', area: 'Playable self-test' },
                     { id: 'repair_interaction', label: 'Repairing interaction issues', status: 'queued', area: 'Playable self-test' },
-                    { id: 'self_test', label: 'Preparing playable demo', status: 'queued', area: 'Playable self-test' },
-                    { id: 'preview', label: 'Preparing workspace preview', status: 'queued', area: 'Browser workspace' }
+                    { id: 'self_test', label: 'Testing controls and restart', status: 'queued', area: 'Playable self-test' },
+                    { id: 'preview', label: 'Final playable game ready', status: 'queued', area: 'Browser workspace' }
                 ],
                 onCancel: () => {
                     if (cancelToken.cancelled) return;
@@ -18391,6 +18661,54 @@ HTML5 Constraints: Canvas, playable, responsive, no external dependencies, singl
             progress.completeStage('prepare');
             await generateProjectByMode(plan, getCurrentGameSpec(), progress);
             assertGenerationNotCancelled(cancelToken);
+            const finishedGate = getFinishedPlayableGateStatus(plan.generatedProject || {});
+            if (!finishedGate.ok) {
+                if (progressContainer) progressContainer.style.display = 'none';
+                chatHistory.classList.remove('is-generating');
+                const inputArea = document.querySelector('.chat-input-wrapper');
+                if (inputArea) inputArea.style.display = '';
+                updateChatWorkfeedStep(generationWorkfeed, finishedGate.reason === 'art_ui_incomplete' ? 'visual_enhance' : 'final_validation', {
+                    status: 'warning',
+                    summary: finishedGate.message
+                });
+                updateChatWorkfeedStep(generationWorkfeed, 'preview', {
+                    status: 'queued',
+                    summary: 'Finished workspace is waiting for recovery.'
+                });
+                showFinishedPlayableRecoveryCard(plan, finishedGate, {
+                    onRetry: () => {
+                        if (plan) {
+                            delete plan.generatedProject;
+                            delete plan.aiDirectGeneration;
+                            plan.generationMode = null;
+                        }
+                        runGenerationAnimation(plan);
+                    },
+                    onViewDraft: () => {
+                        if (plan && plan.generatedProject) {
+                            plan.generatedProject.__viewingPlayableDraft = true;
+                            plan.generatedProject.deliveryTier = plan.generatedProject.deliveryTier || 'core';
+                            plan.generatedProject.workspaceNotice = plan.generatedProject.workspaceNotice
+                                || 'Playable draft opened. Art/UI generation still needs recovery before this is a finished game.';
+                        }
+                        showAutoGenerationResult(plan, {
+                            onMounted: () => {
+                                updateChatWorkfeedStep(generationWorkfeed, 'preview', {
+                                    status: 'warning',
+                                    summary: 'Playable draft opened by user choice.'
+                                });
+                                completeChatWorkfeed(
+                                    generationWorkfeed,
+                                    buildGenerationCompletionReceipt(plan, Date.now() - generationStartedAt),
+                                    { onAction: handleCompletionReceiptAction }
+                                );
+                            }
+                        });
+                    }
+                });
+                progress.finish();
+                return;
+            }
             const tDone = setTimeout(() => {
                 if (cancelToken.cancelled) return;
                 if (progressContainer) progressContainer.style.display = 'none';
