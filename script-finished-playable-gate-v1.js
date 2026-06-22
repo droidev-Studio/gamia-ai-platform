@@ -6284,11 +6284,11 @@ Treat genre conventions as suggested, not confirmed, unless the user explicitly 
         const styleLabel = getProjectStyleForReceipt(project, plan);
         const gameplayLabel = getProjectGameplayForReceipt(plan);
         const tierLabel = String(deliveryTier || '').toLowerCase();
-        const skippedText = skippedLabels.length ? skippedLabels.join(', ') : 'optional polish';
+        const skippedText = skippedLabels.length ? skippedLabels.join(', ') : 'advanced finish stages';
         const summary = viewingPlayableDraft
             ? `Playable draft opened. Art/UI generation still needs recovery${skippedLabels.length ? `: ${skippedText}` : ''}.`
             : partialEnhancement
-                ? `${title} is playable now${styleLabel ? ` with ${styleLabel} art/UI` : ''}. Some polish steps were skipped: ${skippedText}.`
+                ? `${title} is playable now${styleLabel ? ` with ${styleLabel} art/UI` : ''}. Some advanced finish stages were skipped: ${skippedText}.`
             : interactiveReport && interactiveReport.ok === true
                 ? `${title} created as a finished playable game${styleLabel ? ` with ${styleLabel} art/UI` : ''}. Controls and restart passed self-tests.`
                 : validationReport && validationReport.ok === false
@@ -6298,23 +6298,23 @@ Treat genre conventions as suggested, not confirmed, unless the user explicitly 
             badge: 'Generated',
             title: viewingPlayableDraft
                 ? 'Playable draft opened in the workspace'
-                : partialEnhancement ? 'Playable game created with partial polish' : 'Finished game created in the workspace',
+                : partialEnhancement ? 'Playable game created with advanced polish skipped' : 'Finished game created in the workspace',
             summary,
             durationMs,
             changedAreas: [
-                viewingPlayableDraft ? 'Playable draft' : partialEnhancement ? 'Playable core delivered' : 'Playable runtime',
+                viewingPlayableDraft ? 'Playable draft' : partialEnhancement ? 'Verified playable version' : 'Playable runtime',
                 `Game: ${title}`,
                 ...(styleLabel && !viewingPlayableDraft ? [`Art/UI: ${styleLabel}`] : []),
                 'Game rules',
                 'Project files',
                 ...(deliveryTier ? [`Delivery tier: ${deliveryTier}`] : []),
-                ...(partialEnhancement && skippedLabels.length ? [`Skipped polish: ${skippedText}`] : [])
+                ...(partialEnhancement && skippedLabels.length ? [`Skipped finish stages: ${skippedText}`] : [])
             ],
             preservedAreas: [
                 'Selected model',
                 `Gameplay: ${gameplayLabel}`,
                 'Browser-safe preview boundary',
-                ...(partialEnhancement && !viewingPlayableDraft ? [`${tierLabel === 'core' ? 'Core playable' : 'Verified playable version'} stayed available while optional polish recovered`] : []),
+                ...(partialEnhancement && !viewingPlayableDraft ? [`${tierLabel === 'core' ? 'Core playable' : 'Verified playable version'} stayed available while finished-game stages recovered`] : []),
                 ...(viewingPlayableDraft ? ['Art/UI recovery still required before finished delivery'] : [])
             ],
             previewStatus: previewStatusFromProject(project),
@@ -9903,6 +9903,22 @@ Lock Game Type to "Bullet Hell / Flying Shooter" and genre to "bullet-hell".`
                     levelHint: 'L1'
                 });
             },
+            buildGenerationContextPackForTest(options = {}) {
+                return buildGenerationContextPack(options.spec || {
+                    gameType: 'Cozy Sim',
+                    artStyle: 'Gothic',
+                    gameSetting: 'Tea house',
+                    coreGameplay: 'Serve tea orders',
+                    playerGoal: 'Keep customers calm',
+                    mainChallenge: 'Time pressure',
+                    progressionSystem: 'Unlock recipes',
+                    difficultyLevel: 'Normal'
+                }, options.productionPlan || {
+                    title: 'Tea House Test',
+                    coreLoop: 'Read orders, brew tea, serve customers.',
+                    visualDirection: 'Readable gothic tea-house UI.'
+                }, options.productionBrief || 'FinishedGameBrief for a complete playable 2D game.', options.prompt || 'Make a gothic tea house serving game.');
+            },
             setWorkspaceInteractiveReport(report = {}) {
                 const workspace = document.querySelector('[data-game-workspace]');
                 if (!workspace || !workspace.__plan || !workspace.__plan.generatedProject) {
@@ -10081,6 +10097,8 @@ Lock Game Type to "Bullet Hell / Flying Shooter" and genre to "bullet-hell".`
             ...project,
             id: project.projectId || project.id || fallbackProjectId,
             projectId: project.projectId || project.id || fallbackProjectId,
+            revisionId: project.revisionId || project.currentRevisionId || (report && (report.revisionId || report.currentRevisionId)) || '',
+            currentRevisionId: project.currentRevisionId || project.revisionId || (report && (report.currentRevisionId || report.revisionId)) || '',
             previewUrl,
             remotePreviewUrl,
             codeFiles,
@@ -10241,6 +10259,14 @@ Lock Game Type to "Bullet Hell / Flying Shooter" and genre to "bullet-hell".`
             name: compactModelText(planTitle || compactSpec.name || compactSpec.gameSetting || compactSpec.gameType || 'AI Direct Game', 120)
         };
         const requestBrief = buildCompactProductionBriefText(requestPlan, requestSpec);
+        const contextBundle = buildGenerationContextPack(requestSpec, requestPlan, requestBrief || productionBrief, prompt);
+        recordDiagnostic('generation-context-pack', {
+            taskType: contextBundle.contextPack.taskType,
+            region: contextBundle.contextPack.region,
+            tokenEstimate: contextBundle.contextPack.tokenEstimate,
+            includedRefs: contextBundle.contextPack.includedRefs.map(ref => ({ path: ref.path, kind: ref.kind || '' })),
+            omittedReason: contextBundle.contextPack.omittedReason
+        });
         const callEventId = addExecutionEvent(
             `Calling ${activeModel.label || getModelLabel(activeModel.providerId, activeModel.modelId)}`,
             'running',
@@ -10262,6 +10288,11 @@ Lock Game Type to "Bullet Hell / Flying Shooter" and genre to "bullet-hell".`
                     gameSpec: requestSpec,
                     productionPlan: requestPlan,
                     productionBrief: requestBrief || productionBrief,
+                    contextPack: contextBundle.contextPack,
+                    taskType: contextBundle.contextPack.taskType,
+                    region: contextBundle.contextPack.region,
+                    rollingSummary: contextBundle.contextPack.rollingSummary,
+                    summaryVersion: contextBundle.contextPack.summaryVersion,
                     provider: activeModel.providerId,
                     model: activeModel.modelId,
                     modelMeta: activeModel,
@@ -10792,12 +10823,80 @@ Lock Game Type to "Bullet Hell / Flying Shooter" and genre to "bullet-hell".`
         };
     }
 
+    function buildGenerationContextPack(spec = getCurrentGameSpec(), productionPlan = null, productionBrief = '', prompt = '') {
+        const compactSpec = compactGameSpecForGeneration(spec);
+        const compactPlan = compactProductionPlanForGeneration(productionPlan, compactSpec);
+        const task = {
+            taskType: 'generate',
+            region: 'project/create'
+        };
+        const rollingSummary = {
+            schema: 'gamia-rolling-summary/v1',
+            summaryVersion: 1,
+            updatedAt: new Date().toISOString(),
+            currentGame: compactPlan?.title || compactSpec.title || compactSpec.name || 'New generated game',
+            playerGoal: compactSpec.playerGoal || compactSpec.goal || compactPlan?.coreLoop || '',
+            confirmedGameSpec: redactSensitiveDeep(compactSpec),
+            appliedChanges: [],
+            negativeConstraints: [
+                'No 3D, WebGL, Three.js, VR, multiplayer, backend calls, external dependencies, CDN, remote images, imports, fetch, XHR, WebSocket, cookies, or secrets.',
+                'Do not deliver a static screenshot, explanation page, or non-interactive canvas.'
+            ],
+            codeResourceMap: [],
+            recentFailuresAndRepair: {
+                interactiveOk: false,
+                failed: [],
+                fatalErrors: []
+            },
+            mustPreserveNext: [
+                'Deliver a complete finished 2D HTML5 Canvas game.',
+                'Keep Gamia runtime bridge start/restart/dispatchInput/getState working.',
+                'Include visible onboarding, HUD/objective feedback, Start, Restart, and completion or fail states.'
+            ]
+        };
+        const pack = redactSensitiveDeep({
+            schema: CONTEXT_PACK_VERSION,
+            taskType: task.taskType,
+            region: task.region,
+            prompt: redactSensitiveText(prompt),
+            budgetTokens: CONTEXT_PACK_BUDGETS.generate,
+            tokenEstimate: 0,
+            projectId: '',
+            baseRevision: '',
+            summaryVersion: rollingSummary.summaryVersion,
+            rollingSummary,
+            recentTurns: chatTranscript.slice(-6),
+            includedRefs: [
+                { path: 'originalPrompt', kind: 'prompt', includedSize: String(prompt || '').length },
+                { path: 'gameSpec', kind: 'confirmed_spec', includedSize: JSON.stringify(compactSpec || {}).length },
+                { path: 'finishedGameBrief', kind: 'production_brief', includedSize: String(productionBrief || '').length },
+                { path: 'productionPlan', kind: 'production_plan', includedSize: JSON.stringify(compactPlan || {}).length },
+                { path: 'runtimeBridgeContract', kind: 'platform_contract', version: GAMIA_RUNTIME_BRIDGE_VERSION }
+            ],
+            includedSummaries: [
+                { type: 'generation_rolling_summary', summaryVersion: rollingSummary.summaryVersion },
+                { type: 'recent_chat', count: Math.min(6, chatTranscript.length) }
+            ],
+            omittedReason: [
+                { path: 'runtime/index.html', reason: 'not created yet for generate task' },
+                { path: 'workspace_history', reason: 'new generation uses prompt, GameSpec, and FinishedGameBrief instead of raw chat history' }
+            ],
+            createdAt: new Date().toISOString()
+        });
+        pack.tokenEstimate = estimateContextTokens(pack);
+        return {
+            task,
+            contextPack: pack
+        };
+    }
+
     async function editAIDirectGameProject(plan, prompt, target = null) {
         const activeModel = requireActiveAIModel('AI direct game edit');
         const currentProject = plan && plan.generatedProject ? plan.generatedProject : {};
         const sourceSpec = plan && plan.generatedSpec ? plan.generatedSpec : getCurrentGameSpec();
         const workspace = document.querySelector('[data-game-workspace]');
         const contextBundle = buildWorkspaceContextPack(workspace, plan, prompt, target);
+        const workspaceIdentity = workspace ? ensureWorkspaceIdentity(workspace, plan) : null;
         const codeFiles = contextBundle.relevantCodeFiles.map(file => ({
             path: file.path,
             content: String(file.content || '')
@@ -10818,9 +10917,11 @@ Lock Game Type to "Bullet Hell / Flying Shooter" and genre to "bullet-hell".`
                 editPrompt: prompt,
                 target,
                 projectId: currentProject.projectId || currentProject.id || '',
+                sessionId: workspaceIdentity && workspaceIdentity.workspaceId ? workspaceIdentity.workspaceId : '',
                 previewUrl: currentProject.previewUrl || '',
                 currentFiles: codeFiles,
                 relevantCodeFiles: codeFiles,
+                currentFileRefs: contextBundle.contextPack.includedRefs,
                 contextPack: contextBundle.contextPack,
                 taskType: contextBundle.contextPack.taskType,
                 region: contextBundle.contextPack.region,
@@ -10866,6 +10967,152 @@ Lock Game Type to "Bullet Hell / Flying Shooter" and genre to "bullet-hell".`
         return true;
     }
 
+    function applyPreviewFrameContentFit(frame) {
+        if (!frame) return false;
+        let win = null;
+        let doc = null;
+        try {
+            win = frame.contentWindow;
+            doc = frame.contentDocument || (win && win.document);
+        } catch (error) {
+            return false;
+        }
+        if (!win || !doc || !doc.body || !doc.documentElement) return false;
+
+        if (!doc.getElementById('gamia-preview-fit-style')) {
+            const style = doc.createElement('style');
+            style.id = 'gamia-preview-fit-style';
+            style.textContent = `
+html, body {
+  width: 100% !important;
+  height: 100% !important;
+  margin: 0 !important;
+  overflow: hidden !important;
+  background: #05070d !important;
+}
+canvas, svg, video, img {
+  box-sizing: border-box !important;
+  max-width: 100vw !important;
+  max-height: 100vh !important;
+}
+[data-gamia-preview-fit-stage] {
+  transform-origin: 0 0 !important;
+  will-change: transform !important;
+}`;
+            (doc.head || doc.documentElement).appendChild(style);
+        }
+
+        const getViewportSize = () => {
+            const frameRect = frame.getBoundingClientRect();
+            return {
+                width: Math.max(1, Math.round(doc.documentElement.clientWidth || win.innerWidth || frameRect.width || 1)),
+                height: Math.max(1, Math.round(doc.documentElement.clientHeight || win.innerHeight || frameRect.height || 1))
+            };
+        };
+
+        const canvases = Array.from(doc.querySelectorAll('canvas')).filter(canvas => {
+            const rect = canvas.getBoundingClientRect();
+            return rect.width > 1 || rect.height > 1 || canvas.width > 1 || canvas.height > 1;
+        });
+
+        if (canvases.length) {
+            const fitCanvasPreview = () => {
+                const viewport = getViewportSize();
+                const bodyChildren = Array.from(doc.body.children).filter(child => {
+                    if (!child || child.id === 'gamia-preview-fit-style') return false;
+                    return !/^(SCRIPT|STYLE|LINK|META|NOSCRIPT)$/i.test(child.tagName || '');
+                });
+                const onlyCanvasSurface = bodyChildren.length > 0 && bodyChildren.every(child => {
+                    if (child.tagName && child.tagName.toLowerCase() === 'canvas') return true;
+                    return Boolean(child.querySelector && child.querySelector('canvas') && child.textContent.trim().length < 12);
+                });
+                if (onlyCanvasSurface) {
+                    doc.body.style.display = 'grid';
+                    doc.body.style.placeItems = 'center';
+                    doc.body.style.alignContent = 'center';
+                }
+                canvases.forEach(canvas => {
+                    const rect = canvas.getBoundingClientRect();
+                    const naturalWidth = Math.max(1, Number(canvas.width) || rect.width || canvas.clientWidth || viewport.width);
+                    const naturalHeight = Math.max(1, Number(canvas.height) || rect.height || canvas.clientHeight || viewport.height);
+                    const aspect = naturalWidth / naturalHeight;
+                    canvas.style.display = 'block';
+                    canvas.style.margin = onlyCanvasSurface ? 'auto' : (canvas.style.margin || '0 auto');
+                    canvas.style.maxWidth = '100vw';
+                    canvas.style.maxHeight = '100vh';
+                    canvas.style.objectFit = 'contain';
+                    if (viewport.width / viewport.height > aspect) {
+                        canvas.style.width = 'auto';
+                        canvas.style.height = '100vh';
+                    } else {
+                        canvas.style.width = '100vw';
+                        canvas.style.height = 'auto';
+                    }
+                });
+            };
+            fitCanvasPreview();
+            try {
+                win.removeEventListener('resize', win.__gamiaPreviewFitCanvasHandler || fitCanvasPreview);
+                win.__gamiaPreviewFitCanvasHandler = fitCanvasPreview;
+                win.addEventListener('resize', fitCanvasPreview);
+                win.requestAnimationFrame && win.requestAnimationFrame(fitCanvasPreview);
+            } catch (error) {
+                /* Preview content can navigate while fitting. */
+            }
+            window.setTimeout(fitCanvasPreview, 120);
+            window.setTimeout(fitCanvasPreview, 480);
+            return true;
+        }
+
+        if (doc.body.dataset.gamiaPreviewFitApplied !== 'stage') {
+            const visibleChildren = Array.from(doc.body.children).filter(child => {
+                if (!child || child.id === 'gamia-preview-fit-host') return false;
+                return !/^(SCRIPT|STYLE|LINK|META|NOSCRIPT)$/i.test(child.tagName || '');
+            });
+            if (visibleChildren.length) {
+                const host = doc.createElement('div');
+                const stage = doc.createElement('div');
+                host.id = 'gamia-preview-fit-host';
+                host.style.cssText = 'position:fixed!important;inset:0!important;overflow:hidden!important;background:#05070d!important;';
+                stage.dataset.gamiaPreviewFitStage = 'true';
+                stage.style.cssText = 'position:absolute!important;left:0!important;top:0!important;';
+                visibleChildren.forEach(child => stage.appendChild(child));
+                host.appendChild(stage);
+                doc.body.appendChild(host);
+                doc.body.dataset.gamiaPreviewFitApplied = 'stage';
+            }
+        }
+
+        const fitStagePreview = () => {
+            const stage = doc.querySelector('[data-gamia-preview-fit-stage]');
+            if (!stage) return;
+            const viewport = getViewportSize();
+            stage.style.transform = 'none';
+            const stageRect = stage.getBoundingClientRect();
+            const childRects = Array.from(stage.children).map(child => child.getBoundingClientRect()).filter(rect => rect.width > 1 && rect.height > 1);
+            const contentWidths = childRects.map(rect => rect.right - stageRect.left);
+            const contentHeights = childRects.map(rect => rect.bottom - stageRect.top);
+            const contentWidth = Math.max(1, stage.scrollWidth || 0, stageRect.width || 0, ...contentWidths);
+            const contentHeight = Math.max(1, stage.scrollHeight || 0, stageRect.height || 0, ...contentHeights);
+            const scale = Math.min(viewport.width / contentWidth, viewport.height / contentHeight, 1);
+            const left = Math.max(0, (viewport.width - contentWidth * scale) / 2);
+            const top = Math.max(0, (viewport.height - contentHeight * scale) / 2);
+            stage.style.transform = `translate3d(${left}px, ${top}px, 0) scale(${scale})`;
+        };
+        fitStagePreview();
+        try {
+            win.removeEventListener('resize', win.__gamiaPreviewFitStageHandler || fitStagePreview);
+            win.__gamiaPreviewFitStageHandler = fitStagePreview;
+            win.addEventListener('resize', fitStagePreview);
+            win.requestAnimationFrame && win.requestAnimationFrame(fitStagePreview);
+        } catch (error) {
+            /* Preview content can navigate while fitting. */
+        }
+        window.setTimeout(fitStagePreview, 120);
+        window.setTimeout(fitStagePreview, 480);
+        return true;
+    }
+
     function nudgePreviewFrameLayout(frame) {
         if (!frame) return;
         try {
@@ -10881,6 +11128,7 @@ Lock Game Type to "Bullet Hell / Flying Shooter" and genre to "bullet-hell".`
                     if (win) win.dispatchEvent(new Event('resize'));
                 }
             }
+            applyPreviewFrameContentFit(frame);
         } catch (error) {
             /* Cross-origin previews cannot be nudged directly. */
         }
@@ -10897,6 +11145,7 @@ Lock Game Type to "Bullet Hell / Flying Shooter" and genre to "bullet-hell".`
                 frame.srcdoc = html;
                 frame.__pendingVisibleReload = workspace.dataset.generatedView !== 'preview';
                 if (previewUrl) frame.dataset.previewUrl = previewUrl;
+                window.setTimeout(() => applyPreviewFrameContentFit(frame), 120);
             } else if (previewUrl) {
                 frame.removeAttribute('srcdoc');
                 frame.src = previewUrl;
@@ -13690,7 +13939,7 @@ console.log('Droi generated game:', GAME_TITLE);`
         const workspaceNotice = project && project.workspaceNotice
             || generationReport.workspaceNotice
             || (project && project.partialEnhancement || generationReport.partialEnhancement
-                ? 'Playable version ready. Some polish steps did not finish.'
+                ? 'Playable version ready. Some advanced finish stages did not finish.'
                 : '');
         const workspaceNoticeHtml = workspaceNotice
             ? [
@@ -13698,7 +13947,7 @@ console.log('Droi generated game:', GAME_TITLE);`
                 '<strong>Playable version ready</strong>',
                 `<span>${escapeHtml(workspaceNotice)}</span>`,
                 deliveryTier ? `<small>Delivery tier: ${escapeHtml(deliveryTier)}</small>` : '',
-                skippedStages.length ? `<small>Skipped polish: ${skippedStages.map(stage => escapeHtml(stage.id || stage.label || 'optional stage')).join(', ')}</small>` : '',
+                skippedStages.length ? `<small>Skipped finish stages: ${skippedStages.map(stage => escapeHtml(stage.id || stage.label || 'advanced finish stage')).join(', ')}</small>` : '',
                 '</div>'
             ].join('')
             : '';
@@ -13863,10 +14112,10 @@ console.log('Droi generated game:', GAME_TITLE);`
                 ? `<div class="summary-item"><strong>Models:</strong> ${stages.map(stage => `${escapeHtml(stage.label)} ${escapeHtml(modelMetaDisplay(stage.meta))}`).join(' / ')}</div>`
                 : '',
             deliveryTier
-                ? `<div class="summary-item"><strong>Delivery tier:</strong> ${escapeHtml(deliveryTier)}${partialEnhancement ? ' / partial polish' : ''}</div>`
+                ? `<div class="summary-item"><strong>Delivery tier:</strong> ${escapeHtml(deliveryTier)}${partialEnhancement ? ' / advanced polish skipped' : ''}</div>`
                 : '',
             skippedStages.length
-                ? `<div class="summary-item"><strong>Skipped stages:</strong> ${skippedStages.map(stage => escapeHtml(stage.id || stage.label || 'optional stage')).join(', ')}</div>`
+                ? `<div class="summary-item"><strong>Skipped stages:</strong> ${skippedStages.map(stage => escapeHtml(stage.id || stage.label || 'advanced finish stage')).join(', ')}</div>`
                 : '',
             project && project.validationReport
                 ? `<div class="summary-item"><strong>Validation report:</strong> ${escapeHtml(project.validationReport.ok ? 'Passed' : 'Needs review')}</div>`
@@ -17277,7 +17526,7 @@ console.log('Droi generated game:', GAME_TITLE);`
                     `iframe ${Math.round(frameRect.width)}x${Math.round(frameRect.height)}`,
                     rootRect ? `${String(rootLabel).slice(0, 24)} ${Math.round(rootRect.width)}x${Math.round(rootRect.height)}` : 'root unavailable',
                     scrollRatio ? `scroll ${scrollRatio.toFixed(2)}x` : ''
-                ].filter(Boolean).join(' · ');
+                ].filter(Boolean).join(' | ');
             };
             const renderIframeThemeOverlay = () => {
                 const host = previewFrame.parentElement;
@@ -17319,6 +17568,9 @@ console.log('Droi generated game:', GAME_TITLE);`
                 } catch (error) {
                     iframePreviewErrorLog.push(error && (error.message || String(error)));
                 }
+                applyPreviewFrameContentFit(previewFrame);
+                window.setTimeout(() => applyPreviewFrameContentFit(previewFrame), 180);
+                window.setTimeout(() => applyPreviewFrameContentFit(previewFrame), 720);
                 window.setTimeout(validateIframePainted, 280);
                 window.setTimeout(validateIframePainted, 1100);
                 window.setTimeout(validateIframePainted, 2400);
@@ -17335,13 +17587,18 @@ console.log('Droi generated game:', GAME_TITLE);`
                     } else {
                         nudgePreviewFrameLayout(previewFrame);
                     }
+                    applyPreviewFrameContentFit(previewFrame);
                     window.setTimeout(validateIframePainted, 120);
                     window.setTimeout(validateIframePainted, 900);
                     window.setTimeout(() => nudgePreviewFrameLayout(previewFrame), 300);
+                    window.setTimeout(() => applyPreviewFrameContentFit(previewFrame), 360);
                     window.setTimeout(inspectIframeLayout, 240);
                 });
             }
-            window.addEventListener('resize', inspectIframeLayout);
+            window.addEventListener('resize', () => {
+                applyPreviewFrameContentFit(previewFrame);
+                inspectIframeLayout();
+            });
             container.__gameEditRuntime = {
                 kind: 'iframe',
                 canDirectApply: true,
