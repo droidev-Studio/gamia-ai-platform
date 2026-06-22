@@ -5963,8 +5963,8 @@ Treat genre conventions as suggested, not confirmed, unless the user explicitly 
         const category = String(error.category || error.data?.category || '').toLowerCase();
         const message = `${error.message || ''} ${error.title || ''} ${error.technicalMessage || ''}`.toLowerCase();
         if (code === 'INTERACTIVE_SELF_TEST_FAILED') return 'self_test';
-        if (code.includes('INTERACTIVE') || /self[-\s]?test|start button|restart|input/.test(message)) return 'self_test';
         if (code.includes('REPAIR') || /repair/.test(message)) return 'repair_interaction';
+        if (code.includes('INTERACTIVE') || /self[-\s]?test|start button|restart|input/.test(message)) return 'self_test';
         if (code.includes('RENDER') || category === 'validation_failure' && /render|canvas|preview/.test(message)) return 'render_check';
         if (code.includes('VALIDATION') || /validation/.test(message)) return 'final_self_test';
         if (code.includes('STREAM')) return 'preview';
@@ -6278,7 +6278,7 @@ Treat genre conventions as suggested, not confirmed, unless the user explicitly 
             .map(stage => String(stage.label || stage.id || '').replace(/_/g, ' ').trim())
             .filter(Boolean);
         const partialEnhancement = Boolean(project.partialEnhancement || generationReport?.partialEnhancement || skippedLabels.length);
-        const viewingPlayableDraft = project.__viewingPlayableDraft === true || String(deliveryTier).toLowerCase() === 'core';
+        const viewingPlayableDraft = project.__viewingPlayableDraft === true;
         const interactiveReport = getProjectInteractiveReport(project);
         const title = getProjectTitleForReceipt(project, plan);
         const styleLabel = getProjectStyleForReceipt(project, plan);
@@ -8159,19 +8159,58 @@ Lock Game Type to "Bullet Hell / Flying Shooter" and genre to "bullet-hell".`
         };
     }
 
-    function buildProductionBriefText(plan = latestGamePlan, spec = getCurrentGameSpec()) {
+    function buildProductionBriefText(plan = latestGamePlan, spec = getCurrentGameSpec(), options = {}) {
         const normalized = normalizeGamePlanForGeneration(plan, spec);
+        const originalPrompt = compactModelText(options.originalPrompt || savedPrompt || analysisState.background || spec.background || '', 700);
+        const gameSpecRows = [
+            ['Game Type', spec.gameType],
+            ['Art Style', spec.artStyle],
+            ['Setting', spec.gameSetting],
+            ['Core Gameplay', spec.coreGameplay],
+            ['Player Goal', spec.playerGoal],
+            ['Main Challenge', spec.mainChallenge],
+            ['Progression System', spec.progressionSystem],
+            ['Difficulty Level', spec.difficultyLevel || 'Normal']
+        ];
         return [
+            'FinishedGameBrief',
+            '',
+            'Original User Request:',
+            originalPrompt || 'Use the confirmed GameSpec and AI-expanded plan as the source request.',
+            '',
+            'AI-Expanded Playable Game Plan:',
             `Title: ${normalized.title}`,
             `Hook: ${normalized.hook}`,
             `Story: ${normalized.storyPremise}`,
             `Core Loop: ${normalized.coreLoop}`,
             `Moment-to-Moment: ${normalized.momentToMoment}`,
-            `Visual Direction: ${normalized.visualDirection}`,
-            `Enemy / Challenge Design: ${normalized.enemyDesign}`,
+            `Challenge Design: ${normalized.enemyDesign}`,
             `Progression Plan: ${normalized.progressionPlan}`,
             `Player Fantasy: ${normalized.playerFantasy}`,
-            `P0 Scope: ${normalized.prototypeScope}`
+            `Finished Scope: ${normalized.prototypeScope}`,
+            '',
+            'Confirmed 8-Dimension GameSpec:',
+            ...gameSpecRows.map(([label, value]) => `- ${label}: ${value || 'Not specified'}`),
+            '',
+            'Art/UI Direction:',
+            `- Required style: ${spec.artStyle || normalized.visualDirection || 'Readable finished 2D game art'}`,
+            `- Visual direction: ${normalized.visualDirection}`,
+            '- Apply cohesive HUD, buttons, feedback, background, character/object silhouettes, and readable state labels.',
+            '',
+            'Backend Art/UI Resource Requirement:',
+            '- The generation pipeline must run the backend art/UI resource selection or generated canvas style path.',
+            '- The returned project report must include artResourceDecision, uiSkinDecision, assetManifest, and visualStyleReport.',
+            '- If no library resource matches, mark assetSource as generated_canvas_style and still apply a finished visual/UI treatment.',
+            '',
+            'Playable Delivery Contract:',
+            '- Deliver a complete finished 2D HTML5 Canvas game, not a plan, landing page, screenshot, or core-only demo.',
+            `- Runtime bridge required: ${GAMIA_RUNTIME_BRIDGE_VERSION} with start, restart, pause, resume, dispatchInput, and getState.`,
+            '- getState may use signals/capabilities instead of mandatory score/timer when the game type does not need score/timer.',
+            '- Include visible onboarding/instructions, HUD/objective feedback, start/restart, win/fail or completion states, and responsive iframe layout.',
+            '',
+            'Prohibited Output:',
+            '- No 3D, WebGL, Three.js, VR, multiplayer, backend calls, external dependencies, CDN, remote images, imports, fetch, XHR, WebSocket, cookies, or secrets.',
+            '- Do not return a pure explanation page, non-interactive canvas, empty iframe, template claim, or fake success.'
         ].join('\n');
     }
 
@@ -8222,13 +8261,28 @@ Lock Game Type to "Bullet Hell / Flying Shooter" and genre to "bullet-hell".`
         const compact = compactProductionPlanForGeneration(plan, spec);
         if (!compact) return '';
         return [
-            `Title: ${compact.title}`,
-            `Playable loop: ${compact.coreLoop}`,
-            `Moment-to-moment: ${compact.momentToMoment}`,
-            `Visual direction: ${compact.visualDirection}`,
-            `Challenge design: ${compact.enemyDesign}`,
-            `Progression: ${compact.progressionPlan}`,
-            `Scope: ${compact.prototypeScope}`
+            'FinishedGameBrief',
+            `Original User Request: ${compactModelText(savedPrompt || spec.background || '', 420) || 'Use the confirmed GameSpec and AI-expanded plan.'}`,
+            'Confirmed 8-Dimension GameSpec:',
+            `- Game Type: ${spec.gameType || 'Not specified'}`,
+            `- Art Style: ${spec.artStyle || 'Not specified'}`,
+            `- Setting: ${spec.gameSetting || 'Not specified'}`,
+            `- Core Gameplay: ${spec.coreGameplay || 'Not specified'}`,
+            `- Player Goal: ${spec.playerGoal || 'Not specified'}`,
+            `- Main Challenge: ${spec.mainChallenge || 'Not specified'}`,
+            `- Progression System: ${spec.progressionSystem || 'Not specified'}`,
+            `- Difficulty Level: ${spec.difficultyLevel || 'Normal'}`,
+            'AI-Expanded Playable Game Plan:',
+            `- Title: ${compact.title}`,
+            `- Playable Loop: ${compact.coreLoop}`,
+            `- Moment-to-Moment: ${compact.momentToMoment}`,
+            `- Visual Direction: ${compact.visualDirection}`,
+            `- Challenge Design: ${compact.enemyDesign}`,
+            `- Progression: ${compact.progressionPlan}`,
+            `- Finished Scope: ${compact.prototypeScope}`,
+            'Backend Art/UI Resource Requirement: run art_ui_apply resource selection; report artResourceDecision, uiSkinDecision, assetManifest, visualStyleReport; use generated_canvas_style when no library match exists.',
+            `Playable Delivery Contract: complete finished 2D HTML5 Canvas game; runtime bridge ${GAMIA_RUNTIME_BRIDGE_VERSION}; visible onboarding/HUD/objective; start/restart; win/fail or completion states; responsive iframe.`,
+            'Prohibited Output: No 3D, WebGL, Three.js, VR, multiplayer, backend calls, external dependencies, CDN, remote images, imports, fetch/XHR/WebSocket, secrets, pure explanation page, or non-interactive canvas.'
         ].join('\n');
     }
 
@@ -9807,6 +9861,48 @@ Lock Game Type to "Bullet Hell / Flying Shooter" and genre to "bullet-hell".`
             normalizePipelineStageIdForTest(stageId = '') {
                 return normalizePipelineStageId(stageId);
             },
+            buildProductionBriefForTest(plan = {}, spec = {}, options = {}) {
+                return buildProductionBriefText(plan, {
+                    ...getCurrentGameSpec(),
+                    ...spec
+                }, options);
+            },
+            buildCompactProductionBriefForTest(plan = {}, spec = {}) {
+                return buildCompactProductionBriefText(plan, {
+                    ...getCurrentGameSpec(),
+                    ...spec
+                });
+            },
+            getGenerationFailureWorkfeedStepForTest(error = {}) {
+                return getGenerationFailureWorkfeedStep(error);
+            },
+            buildGenerationCompletionReceiptForTest(plan = {}, durationMs = 0) {
+                return buildGenerationCompletionReceipt(plan, durationMs);
+            },
+            buildContextPackForTest(options = {}) {
+                const html = String(options.html || '<!doctype html><html><body><canvas></canvas><script>window.__GAMIA_GAME__={start(){},restart(){},dispatchInput(){},getState(){return {status:"idle",tick:0,canInteract:true}}}</script></body></html>');
+                const plan = {
+                    generatedProject: {
+                        projectId: 'test-context-pack',
+                        codeFiles: [
+                            { path: 'index.html', content: html, language: 'html', kind: 'runtime' },
+                            { path: 'generation-report.json', content: JSON.stringify({ summary: 'Test report', controls: ['Start', 'Restart'] }, null, 2), language: 'json', kind: 'report' }
+                        ],
+                        generationReport: { summary: 'Test report' },
+                        projectMeta: { title: 'Context Pack Test', description: 'A test game.' }
+                    },
+                    generatedSpec: options.generatedSpec || {
+                        meta: { gameName: 'Context Pack Test' },
+                        gameplay: { goal: 'Verify context pack assembly.' }
+                    }
+                };
+                return buildWorkspaceContextPack(null, plan, options.prompt || 'make the controls easier but keep gameplay', options.target || {
+                    itemId: 'combat.wave',
+                    type: 'number',
+                    region: 'spec/tuning',
+                    levelHint: 'L1'
+                });
+            },
             setWorkspaceInteractiveReport(report = {}) {
                 const workspace = document.querySelector('[data-game-workspace]');
                 if (!workspace || !workspace.__plan || !workspace.__plan.generatedProject) {
@@ -10480,16 +10576,239 @@ Lock Game Type to "Bullet Hell / Flying Shooter" and genre to "bullet-hell".`
         }
     }
 
+    const CONTEXT_PACK_VERSION = 'gamia-context-pack-v1';
+    const CONTEXT_PACK_BUDGETS = {
+        ask: 8000,
+        edit_art: 22000,
+        edit_gameplay: 24000,
+        generate: 32000,
+        repair: 32000
+    };
+
+    function estimateContextTokens(value) {
+        return Math.ceil(JSON.stringify(value || '').length / 4);
+    }
+
+    function classifyWorkspaceContextTask(prompt = '', target = null) {
+        const text = String(prompt || '').toLowerCase();
+        const targetRegion = target && target.region ? String(target.region) : '';
+        const targetType = target && target.type ? String(target.type).toLowerCase() : '';
+        let taskType = 'edit_gameplay';
+        if (/\b(why|what|how|explain|question|为什么|什么|怎么|说明|解释)\b/i.test(text)) taskType = 'ask';
+        if (/\b(repair|fix preview|self[- ]?test|restart broken|not playable|报错|修复|不能玩|打不开)\b/i.test(text)) taskType = 'repair';
+        if (/\b(generate|create new|start over|new game|重新生成|新游戏)\b/i.test(text)) taskType = 'generate';
+        if (targetRegion.startsWith('assets/') || targetType === 'image' || targetType === 'audio' || /\b(art|visual|style|palette|color|sprite|asset|ui|hud|background|美术|风格|颜色|素材|界面)\b/i.test(text)) taskType = 'edit_art';
+        if (/\b(gameplay|difficulty|balance|controls?|speed|damage|enemy|wave|score|rules?|mechanic|玩法|难度|平衡|控制|数值|敌人|关卡)\b/i.test(text)) taskType = 'edit_gameplay';
+        if (targetRegion === 'project/overall' && taskType !== 'repair') taskType = 'edit_gameplay';
+        return {
+            taskType,
+            region: targetRegion || (target && target.itemId ? mapEditTargetToRegion(target, prompt) : ''),
+            reason: targetRegion ? 'manual_or_inferred_target_region' : 'prompt_keyword_inference'
+        };
+    }
+
+    function summarizeFileForContext(file) {
+        const content = String(file.content || '');
+        return {
+            path: file.path || file.name || '',
+            kind: file.kind || '',
+            language: file.language || fileExtension(file.path || file.name || ''),
+            size: content.length,
+            hash: simpleStringHash(content)
+        };
+    }
+
+    function simpleStringHash(value = '') {
+        let hash = 2166136261;
+        const text = String(value || '');
+        for (let i = 0; i < text.length; i += 1) {
+            hash ^= text.charCodeAt(i);
+            hash = Math.imul(hash, 16777619) >>> 0;
+        }
+        return hash.toString(16).padStart(8, '0');
+    }
+
+    function compactFileContentForContext(file, taskType, budgetChars) {
+        const content = redactSensitiveText(String(file.content || ''));
+        if (content.length <= budgetChars) return { content, omitted: '' };
+        const path = String(file.path || '').toLowerCase();
+        if (path.endsWith('.json')) {
+            return {
+                content: content.slice(0, budgetChars),
+                omitted: `truncated ${path} to ${budgetChars} chars`
+            };
+        }
+        const markers = [
+            '__GAMIA_GAME__', 'function start', 'function restart', 'dispatchInput', 'getState',
+            'canvas', 'hud', 'score', 'timer', 'objective', 'controls', 'style', 'draw'
+        ];
+        const chunks = [];
+        const chunkSize = Math.max(1200, Math.floor(budgetChars / 4));
+        chunks.push(content.slice(0, chunkSize));
+        for (const marker of markers) {
+            const index = content.toLowerCase().indexOf(marker.toLowerCase());
+            if (index >= 0) {
+                const start = Math.max(0, index - Math.floor(chunkSize / 2));
+                chunks.push(content.slice(start, start + chunkSize));
+            }
+        }
+        chunks.push(content.slice(Math.max(0, content.length - chunkSize)));
+        const joined = Array.from(new Set(chunks)).join('\n\n/* ... context slice ... */\n\n').slice(0, budgetChars);
+        return {
+            content: joined,
+            omitted: `included relevant ${taskType} slices from ${path}; omitted ${Math.max(0, content.length - joined.length)} chars`
+        };
+    }
+
+    function selectContextPackFiles(allFiles = [], task = {}, budgetTokens = 22000) {
+        const budgetChars = Math.max(12000, Math.floor(budgetTokens * 4 * 0.56));
+        const region = String(task.region || '').toLowerCase();
+        const taskType = task.taskType || 'edit_gameplay';
+        const wanted = allFiles.filter(file => {
+            const path = String(file.path || file.name || '').toLowerCase();
+            if (!path || file.content == null) return false;
+            if (path === 'index.html') return true;
+            if (path === 'spec/game.json' || path === 'generation-report.json' || path === 'project-meta.json') return true;
+            if (path === 'assets/manifest.json') return taskType !== 'ask';
+            if (taskType === 'edit_art') return path.includes('asset') || path.includes('style') || path.endsWith('.css') || path.includes('manifest');
+            if (taskType === 'edit_gameplay' || taskType === 'repair') return path.includes('runtime') || path.includes('game') || path.endsWith('.js') || path.endsWith('.html');
+            return region && path.includes(region.replace(/^[^/]+\//, ''));
+        });
+        const ordered = wanted.length ? wanted : allFiles.filter(file => file && file.content != null).slice(0, 4);
+        const relevant = [];
+        const omitted = [];
+        let used = 0;
+        for (const file of ordered) {
+            const path = file.path || file.name || '';
+            const remaining = budgetChars - used;
+            if (remaining < 1400) {
+                omitted.push({ path, reason: 'context budget exhausted' });
+                continue;
+            }
+            const perFileBudget = path === 'index.html' ? Math.min(remaining, Math.floor(budgetChars * 0.72)) : Math.min(remaining, 8000);
+            const compacted = compactFileContentForContext(file, taskType, perFileBudget);
+            used += compacted.content.length;
+            relevant.push({
+                path,
+                content: compacted.content,
+                originalSize: String(file.content || '').length,
+                includedSize: compacted.content.length,
+                hash: simpleStringHash(file.content || ''),
+                omittedReason: compacted.omitted
+            });
+            if (compacted.omitted) omitted.push({ path, reason: compacted.omitted });
+        }
+        return {
+            files: relevant,
+            refs: allFiles.map(summarizeFileForContext),
+            omitted
+        };
+    }
+
+    function buildWorkspaceRollingSummary(workspace, plan, task = {}) {
+        const project = plan && plan.generatedProject ? plan.generatedProject : {};
+        const generated = plan && plan.generatedSpec ? plan.generatedSpec : {};
+        const state = workspace ? getWorkspaceState(workspace) : {};
+        const meta = project.projectMeta || {};
+        const report = project.generationReport || {};
+        const gameSpec = getCurrentGameSpec();
+        const history = (state.historyRecords || []).slice(-6).map(item => item.summary || item.title || '').filter(Boolean);
+        const edits = (state.editEnvelopes || []).slice(-6).map(item => item.prompt || item.op || '').filter(Boolean);
+        const interactive = getProjectInteractiveReport(project) || {};
+        return {
+            schema: 'gamia-rolling-summary/v1',
+            summaryVersion: Number(state.summaryVersion || 0) + 1,
+            updatedAt: new Date().toISOString(),
+            currentGame: meta.title || generated.meta?.gameName || report.title || 'Generated game',
+            playerGoal: generated.gameplay?.goal || gameSpec.playerGoal || report.objective || '',
+            confirmedGameSpec: redactSensitiveDeep(gameSpec),
+            appliedChanges: [...history, ...edits].slice(-8),
+            negativeConstraints: normalizeStringList([
+                ...(Array.isArray(report.knownLimitations) ? report.knownLimitations : []),
+                task.taskType === 'edit_art' ? 'Do not change gameplay unless explicitly requested.' : ''
+            ]),
+            codeResourceMap: buildWorkspaceCodeFiles(project, generated, workspace).map(summarizeFileForContext).slice(0, 20),
+            recentFailuresAndRepair: {
+                interactiveOk: interactive.ok === true,
+                failed: interactive.failed || [],
+                fatalErrors: interactive.fatalErrors || []
+            },
+            mustPreserveNext: [
+                'Keep the game playable in iframe.',
+                'Keep Gamia runtime bridge start/restart/dispatchInput/getState working.',
+                task.taskType === 'edit_art' ? 'Preserve gameplay and numeric rules.' : 'Preserve user-confirmed constraints.'
+            ]
+        };
+    }
+
+    function buildWorkspaceContextPack(workspace, plan, prompt, target = null) {
+        const task = classifyWorkspaceContextTask(prompt, target);
+        const budgetTokens = CONTEXT_PACK_BUDGETS[task.taskType] || CONTEXT_PACK_BUDGETS.edit_gameplay;
+        const project = plan && plan.generatedProject ? plan.generatedProject : {};
+        const generated = plan && plan.generatedSpec ? plan.generatedSpec : getCurrentGameSpec();
+        const allFiles = buildWorkspaceCodeFiles(project, generated, workspace);
+        const selected = selectContextPackFiles(allFiles, task, budgetTokens);
+        const rollingSummary = buildWorkspaceRollingSummary(workspace, plan, task);
+        if (workspace) {
+            const state = getWorkspaceState(workspace);
+            state.rollingSummary = rollingSummary;
+            state.summaryVersion = rollingSummary.summaryVersion;
+            if (!Array.isArray(state.contextPackAudit)) state.contextPackAudit = [];
+            state.contextPackAudit.push({
+                taskType: task.taskType,
+                region: task.region,
+                tokenEstimate: estimateContextTokens(rollingSummary) + estimateContextTokens(selected.files),
+                includedRefs: selected.files.map(file => ({ path: file.path, hash: file.hash, includedSize: file.includedSize })),
+                omittedReason: selected.omitted,
+                createdAt: new Date().toISOString()
+            });
+            state.contextPackAudit = state.contextPackAudit.slice(-12);
+        }
+        const pack = redactSensitiveDeep({
+            schema: CONTEXT_PACK_VERSION,
+            taskType: task.taskType,
+            region: task.region,
+            prompt: redactSensitiveText(prompt),
+            budgetTokens,
+            tokenEstimate: 0,
+            projectId: project.projectId || project.id || '',
+            baseRevision: project.revisionId || project.currentRevisionId || '',
+            summaryVersion: rollingSummary.summaryVersion,
+            rollingSummary,
+            recentTurns: chatTranscript.slice(-6),
+            includedRefs: selected.refs,
+            includedSummaries: [
+                { type: 'workspace_rolling_summary', summaryVersion: rollingSummary.summaryVersion },
+                { type: 'recent_chat', count: Math.min(6, chatTranscript.length) }
+            ],
+            omittedReason: selected.omitted,
+            createdAt: new Date().toISOString()
+        });
+        pack.tokenEstimate = estimateContextTokens(pack) + estimateContextTokens(selected.files);
+        return {
+            task,
+            contextPack: pack,
+            relevantCodeFiles: selected.files
+        };
+    }
+
     async function editAIDirectGameProject(plan, prompt, target = null) {
         const activeModel = requireActiveAIModel('AI direct game edit');
         const currentProject = plan && plan.generatedProject ? plan.generatedProject : {};
         const sourceSpec = plan && plan.generatedSpec ? plan.generatedSpec : getCurrentGameSpec();
-        const codeFiles = buildWorkspaceCodeFiles(currentProject, sourceSpec, null)
-            .filter(file => file && file.content != null)
-            .map(file => ({
-                path: file.path || file.name,
-                content: String(file.content || '')
-            }));
+        const workspace = document.querySelector('[data-game-workspace]');
+        const contextBundle = buildWorkspaceContextPack(workspace, plan, prompt, target);
+        const codeFiles = contextBundle.relevantCodeFiles.map(file => ({
+            path: file.path,
+            content: String(file.content || '')
+        }));
+        recordDiagnostic('workspace-context-pack', {
+            taskType: contextBundle.contextPack.taskType,
+            region: contextBundle.contextPack.region,
+            tokenEstimate: contextBundle.contextPack.tokenEstimate,
+            includedFiles: contextBundle.relevantCodeFiles.map(file => ({ path: file.path, includedSize: file.includedSize, originalSize: file.originalSize })),
+            omittedReason: contextBundle.contextPack.omittedReason
+        });
         const response = await fetch(apiUrl('/api/ai/edit-game-project'), {
             method: 'POST',
             credentials: 'include',
@@ -10501,6 +10820,12 @@ Lock Game Type to "Bullet Hell / Flying Shooter" and genre to "bullet-hell".`
                 projectId: currentProject.projectId || currentProject.id || '',
                 previewUrl: currentProject.previewUrl || '',
                 currentFiles: codeFiles,
+                relevantCodeFiles: codeFiles,
+                contextPack: contextBundle.contextPack,
+                taskType: contextBundle.contextPack.taskType,
+                region: contextBundle.contextPack.region,
+                baseRevision: contextBundle.contextPack.baseRevision,
+                summaryVersion: contextBundle.contextPack.summaryVersion,
                 gameSpec: sourceSpec,
                 provider: activeModel.providerId,
                 model: activeModel.modelId,
@@ -11164,6 +11489,9 @@ Lock Game Type to "Bullet Hell / Flying Shooter" and genre to "bullet-hell".`
                 selectedNumericItemId: '',
                 pendingRuntimePatches: [],
                 editEnvelopes: [],
+                rollingSummary: null,
+                summaryVersion: 0,
+                contextPackAudit: [],
                 toolArtifacts: [],
                 selectedMediaKey: '',
                 selectedMediaAssetId: '',
@@ -11574,6 +11902,10 @@ Lock Game Type to "Bullet Hell / Flying Shooter" and genre to "bullet-hell".`
         state.numericValues = { ...(patches.numericValues || state.numericValues || {}) };
         state.pendingRuntimePatches = Array.isArray(patches.pendingRuntimePatches) ? patches.pendingRuntimePatches : state.pendingRuntimePatches || [];
         state.editEnvelopes = Array.isArray(patches.editEnvelopes) ? patches.editEnvelopes : state.editEnvelopes || [];
+        const memory = snapshot.memory || patches.memory || {};
+        state.rollingSummary = memory.rollingSummary || state.rollingSummary || null;
+        state.summaryVersion = Number(memory.summaryVersion || state.summaryVersion || 0);
+        state.contextPackAudit = Array.isArray(memory.contextPackAudit) ? memory.contextPackAudit : state.contextPackAudit || [];
         state.toolArtifacts = Array.isArray(patches.toolArtifacts) ? patches.toolArtifacts : state.toolArtifacts || [];
         state.historyRecords = Array.isArray(snapshot.history) ? snapshot.history : [];
         state.exportState = snapshot.exportState || state.exportState || {};
@@ -12661,6 +12993,11 @@ console.log('Droi generated game:', GAME_TITLE);`
             numericValues: state.numericValues || {},
             pendingRuntimePatches: state.pendingRuntimePatches || [],
             editEnvelopes: state.editEnvelopes || [],
+            memory: {
+                rollingSummary: state.rollingSummary || null,
+                summaryVersion: Number(state.summaryVersion || 0),
+                contextPackAudit: state.contextPackAudit || []
+            },
             toolArtifacts: (state.toolArtifacts || []).map(artifact => ({
                 toolId: artifact.toolId,
                 artifactType: artifact.artifactType,
