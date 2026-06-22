@@ -5920,7 +5920,7 @@ Treat genre conventions as suggested, not confirmed, unless the user explicitly 
             ...(handle.job.meta || {}),
             activeAttemptId: event.attemptId || ''
         };
-        ['core_playable', 'visual_enhance', 'gameplay_depth', 'ui_polish', 'project_meta', 'final_validation', 'preview'].forEach(stepId => {
+        ['core_playable', 'visual_enhance', 'gameplay_depth', 'ui_polish', 'project_meta', 'final_validation', 'render_check', 'start_test', 'input_test', 'restart_test', 'repair_interaction', 'self_test', 'preview'].forEach(stepId => {
             updateChatWorkfeedStep(handle, stepId, {
                 status: 'queued',
                 summary: ''
@@ -5938,6 +5938,24 @@ Treat genre conventions as suggested, not confirmed, unless the user explicitly 
         if (!handle || !api || typeof api.workfeed.failWorkfeedJob !== 'function') return handle;
         api.workfeed.failWorkfeedJob(handle.job, stepId, summary);
         return refreshChatWorkfeed(handle);
+    }
+
+    function getGenerationFailureWorkfeedStep(error = {}) {
+        const code = String(error.code || error.data?.code || '').toUpperCase();
+        const category = String(error.category || error.data?.category || '').toLowerCase();
+        const message = `${error.message || ''} ${error.title || ''} ${error.technicalMessage || ''}`.toLowerCase();
+        if (code === 'INTERACTIVE_SELF_TEST_FAILED') return 'self_test';
+        if (code.includes('INTERACTIVE') || /self[-\s]?test|start button|restart|input/.test(message)) return 'self_test';
+        if (code.includes('REPAIR') || /repair/.test(message)) return 'repair_interaction';
+        if (code.includes('RENDER') || category === 'validation_failure' && /render|canvas|preview/.test(message)) return 'render_check';
+        if (code.includes('VALIDATION') || /validation/.test(message)) return 'final_validation';
+        if (code.includes('STREAM')) return 'preview';
+        return 'core_playable';
+    }
+
+    function failGenerationWorkfeed(handle, error = {}, fallbackSummary = 'AI direct generation failed.') {
+        const summary = (error && (error.message || error.title || error.technicalMessage)) || fallbackSummary;
+        return failChatWorkfeed(handle, getGenerationFailureWorkfeedStep(error), summary);
     }
 
     function cancelChatWorkfeed(handle, summary = 'Generation canceled.') {
@@ -5975,9 +5993,12 @@ Treat genre conventions as suggested, not confirmed, unless the user explicitly 
     }
 
     function previewStatusFromProject(project) {
+        const interactiveReport = getProjectInteractiveReport(project || {});
+        if (interactiveReport && interactiveReport.ok === true) return 'Playable demo verified';
+        if (interactiveReport && interactiveReport.ok === false) return 'Generated game could not pass playable self-test';
         const report = project && project.validationReport;
         if (report && report.ok === false) return 'Validation needs review';
-        if (report && report.browserRender && report.browserRender.ok === true) return 'Playable preview verified';
+        if (report && report.browserRender && report.browserRender.ok === true) return 'Rendered. Testing controls required';
         if (report && report.ok === true) return 'Loaded, not visually verified';
         return 'Loaded, not visually verified';
     }
@@ -6040,15 +6061,39 @@ Treat genre conventions as suggested, not confirmed, unless the user explicitly 
         const generationReport = project.generationReport || (plan.aiDirectGeneration && plan.aiDirectGeneration.generationReport) || null;
         const validationReport = project.validationReport || (plan.aiDirectGeneration && plan.aiDirectGeneration.validationReport) || null;
         const modelMeta = project.modelMeta || (plan.aiDirectGeneration && plan.aiDirectGeneration.modelMeta) || null;
+        const deliveryTier = project.deliveryTier || generationReport?.deliveryTier || '';
+        const skippedStages = Array.isArray(project.skippedStages)
+            ? project.skippedStages
+            : Array.isArray(generationReport?.skippedStages) ? generationReport.skippedStages : [];
+        const skippedLabels = skippedStages
+            .map(stage => String(stage.label || stage.id || '').replace(/_/g, ' ').trim())
+            .filter(Boolean);
+        const partialEnhancement = Boolean(project.partialEnhancement || generationReport?.partialEnhancement || skippedLabels.length);
+        const interactiveReport = getProjectInteractiveReport(project);
+        const summary = partialEnhancement
+            ? `Core playable created. Some polish steps were skipped${skippedLabels.length ? `: ${skippedLabels.join(', ')}` : ''}.`
+            : interactiveReport && interactiveReport.ok === true
+                ? 'The AI returned project files and the playable demo passed Start, input, and Restart self-tests.'
+                : validationReport && validationReport.ok === false
+                    ? 'The AI returned a project, but backend validation found issues to review.'
+                    : 'The AI returned playable project files and the workspace was refreshed.';
         return {
             badge: 'Generated',
-            title: 'Game created in the workspace',
-            summary: validationReport && validationReport.ok === false
-                ? 'The AI returned a project, but backend validation found issues to review.'
-                : 'The AI returned playable project files and the workspace was refreshed.',
+            title: partialEnhancement ? 'Playable core created in the workspace' : 'Game created in the workspace',
+            summary,
             durationMs,
-            changedAreas: ['Playable runtime', 'Game rules', 'Project files'],
-            preservedAreas: ['Selected model', 'Current GameSpec', 'Browser-safe preview boundary'],
+            changedAreas: [
+                partialEnhancement ? 'Playable core' : 'Playable runtime',
+                'Game rules',
+                'Project files',
+                ...(deliveryTier ? [`Delivery tier: ${deliveryTier}`] : [])
+            ],
+            preservedAreas: [
+                'Selected model',
+                'Current GameSpec',
+                'Browser-safe preview boundary',
+                ...(partialEnhancement ? ['Skipped polish did not block delivery'] : [])
+            ],
             previewStatus: previewStatusFromProject(project),
             ranBackend: true,
             filesUpdated: files.map(file => file.path || file.name).filter(Boolean),
@@ -6060,8 +6105,12 @@ Treat genre conventions as suggested, not confirmed, unless the user explicitly 
             details: {
                 modelMeta,
                 validationReport,
+                interactiveReport,
                 generationReport,
-                sourceTrace: generationReport && generationReport.sourceTrace
+                sourceTrace: generationReport && generationReport.sourceTrace,
+                deliveryTier,
+                partialEnhancement,
+                skippedStages
             }
         };
     }
@@ -8684,17 +8733,35 @@ Lock Game Type to "Bullet Hell / Flying Shooter" and genre to "bullet-hell".`
         );
     }
 
+    const GAMIA_RUNTIME_BRIDGE_VERSION = 'gamia-game-runtime-v1';
+    const GAMIA_RUNTIME_BRIDGE_PROMPT = [
+        'Runtime bridge contract is mandatory for delivery:',
+        'window.__GAMIA_GAME__ = {',
+        '  version: "gamia-game-runtime-v1",',
+        '  start(), restart(), pause(), resume(),',
+        '  dispatchInput(input),',
+        '  getState()',
+        '};',
+        'getState() must return at least { status, tick, score, timer, player: { x, y }, canInteract }.',
+        'start/restart/dispatchInput must change state or the canvas within 1000ms.'
+    ].join('\n');
+
     function validateAIDirectHtml(html) {
         const source = String(html || '');
         const hasExternalDependency = /<(?:script|link|img|audio|video|source|iframe)\b[^>]*(?:src|href)\s*=\s*["']https?:\/\//i.test(source) ||
             /\b(?:import\s*\(|from\s+["'])https?:\/\//i.test(source) ||
             /@import\s+url\(["']?https?:\/\//i.test(source);
+        const hasRuntimeBridge = /__GAMIA_GAME__/.test(source) &&
+            /getState\s*\(/.test(source) &&
+            /dispatchInput\s*\(/.test(source) &&
+            /restart\s*\(/.test(source);
         const checks = [
             { id: 'html_document', label: 'HTML document', ok: /<!doctype\s+html|<html[\s>]/i.test(source), critical: true },
             { id: 'canvas', label: 'Canvas runtime', ok: /<canvas\b/i.test(source), critical: true },
             { id: 'script', label: 'Inline gameplay script', ok: /<script\b/i.test(source), critical: true },
             { id: 'no_external_dependencies', label: 'No external dependencies', ok: !hasExternalDependency, critical: true },
             { id: 'responsive', label: 'Responsive layout', ok: /viewport|resize|innerWidth|innerHeight|100vw|100vh|max-width/i.test(source), critical: false },
+            { id: 'runtime_bridge', label: 'Gamia runtime bridge', ok: hasRuntimeBridge, critical: false },
             { id: 'playable_states', label: 'Playable HUD and states', ok: /score|points|coin|life|hp|timer|time|combo|restart|pause|start|game over|victory|win|fail|分数|金币|生命|倒计时|连击|重新|暂停|开始|胜利|失败/i.test(source), critical: false }
         ];
         const failedCritical = checks.filter(check => check.critical && !check.ok);
@@ -8724,6 +8791,9 @@ Lock Game Type to "Bullet Hell / Flying Shooter" and genre to "bullet-hell".`
             '- Include start, pause, restart, win, and fail states when relevant.',
             '- Include HUD feedback such as score, lives/health, timer, combo, coins, or progress based on the brief.',
             '- Avoid placeholder-only screens, explanation-only output, or black/empty canvas.',
+            '- Expose the mandatory runtime bridge exactly as window.__GAMIA_GAME__.',
+            '',
+            GAMIA_RUNTIME_BRIDGE_PROMPT,
             '',
             `Original prompt:\n${originalPrompt || ''}`,
             '',
@@ -8792,7 +8862,7 @@ Lock Game Type to "Bullet Hell / Flying Shooter" and genre to "bullet-hell".`
         const codeFiles = normalizeModelGeneratedFiles(files).some(file => String(file.path || '').toLowerCase() === 'index.html')
             ? normalizeModelGeneratedFiles(files)
             : [{ path: 'index.html', content: html }];
-        return normalizeGeneratedProject({
+        const fallbackProject = normalizeGeneratedProject({
             projectId,
             previewUrl,
             codeFiles: [
@@ -8815,6 +8885,7 @@ Lock Game Type to "Bullet Hell / Flying Shooter" and genre to "bullet-hell".`
             generationMode: 'ai_direct',
             fallbackReason: reason || 'backend_stage_unavailable'
         }, latestGenerationPlan, spec, activeModel);
+        return await ensureAIDirectProjectDeliveryReady(fallbackProject, spec, productionPlan, productionBrief, activeModel, null);
     }
 
     function decodeEscapedGeneratedContent(content) {
@@ -8863,6 +8934,446 @@ Lock Game Type to "Bullet Hell / Flying Shooter" and genre to "bullet-hell".`
         const backendValidated = project && project.validationReport && project.validationReport.ok === true;
         const hasRunnableSurface = /<canvas\b/i.test(html) && /<script\b/i.test(html);
         return backendValidated && hasRunnableSurface ? html : '';
+    }
+
+    function waitForMs(ms) {
+        return new Promise(resolve => window.setTimeout(resolve, ms));
+    }
+
+    function normalizeInteractiveState(state = {}) {
+        const player = state && state.player && typeof state.player === 'object' ? state.player : {};
+        return {
+            status: String(state.status || state.phase || state.state || '').toLowerCase(),
+            tick: Number(state.tick || state.frame || state.frames || 0),
+            score: Number(state.score || state.points || 0),
+            timer: Number(state.timer || state.time || state.timeLeft || 0),
+            player: {
+                x: Number(player.x || state.playerX || 0),
+                y: Number(player.y || state.playerY || 0)
+            },
+            canInteract: state.canInteract !== false
+        };
+    }
+
+    function statesDiffer(a = {}, b = {}) {
+        const left = normalizeInteractiveState(a);
+        const right = normalizeInteractiveState(b);
+        return left.status !== right.status ||
+            left.tick !== right.tick ||
+            left.score !== right.score ||
+            left.timer !== right.timer ||
+            left.player.x !== right.player.x ||
+            left.player.y !== right.player.y ||
+            left.canInteract !== right.canInteract;
+    }
+
+    function canvasHashFromDocument(doc) {
+        const canvas = doc && doc.querySelector ? doc.querySelector('canvas') : null;
+        if (!canvas || !canvas.width || !canvas.height) {
+            return { ok: false, hash: 0, nonTransparent: 0, width: 0, height: 0 };
+        }
+        try {
+            const ctx = canvas.getContext && canvas.getContext('2d', { willReadFrequently: true });
+            if (!ctx) return { ok: false, hash: 0, nonTransparent: 0, width: canvas.width, height: canvas.height };
+            const sampleWidth = Math.min(canvas.width, 96);
+            const sampleHeight = Math.min(canvas.height, 54);
+            const data = ctx.getImageData(0, 0, sampleWidth, sampleHeight).data;
+            let hash = 0;
+            let nonTransparent = 0;
+            let nonBlack = 0;
+            for (let i = 0; i < data.length; i += 16) {
+                const r = data[i];
+                const g = data[i + 1];
+                const b = data[i + 2];
+                const a = data[i + 3];
+                if (a > 8) nonTransparent += 1;
+                if (a > 8 && (r + g + b) > 30) nonBlack += 1;
+                hash = ((hash * 31) + r * 3 + g * 5 + b * 7 + a) >>> 0;
+            }
+            return {
+                ok: nonTransparent > 0 && nonBlack > 0,
+                hash,
+                nonTransparent,
+                nonBlack,
+                width: canvas.width,
+                height: canvas.height
+            };
+        } catch (error) {
+            return { ok: false, hash: 0, nonTransparent: 0, width: canvas.width, height: canvas.height, error: error.message || String(error) };
+        }
+    }
+
+    async function callRuntimeBridge(bridge, method, ...args) {
+        if (!bridge || typeof bridge[method] !== 'function') return undefined;
+        return await Promise.resolve(bridge[method](...args));
+    }
+
+    function buildInteractiveReportPatch(report = {}) {
+        const failed = [];
+        if (!report.rendered) failed.push('rendered');
+        if (!report.bridgeDetected) failed.push('runtimeBridge');
+        if (!report.startVerified) failed.push('start');
+        if (!report.inputVerified) failed.push('input');
+        if (!report.restartVerified) failed.push('restart');
+        return {
+            ok: false,
+            rendered: Boolean(report.rendered),
+            bridgeDetected: Boolean(report.bridgeDetected),
+            startVerified: Boolean(report.startVerified),
+            inputVerified: Boolean(report.inputVerified),
+            restartVerified: Boolean(report.restartVerified),
+            stateChanged: Boolean(report.stateChanged),
+            failed,
+            fatalErrors: Array.isArray(report.fatalErrors) ? report.fatalErrors : []
+        };
+    }
+
+    function qualityTierFromInteractiveReport(report = {}) {
+        if (report.ok) return 'playable';
+        if (report.startVerified || report.inputVerified) return 'interactive';
+        if (report.rendered) return 'rendered';
+        return 'blocked';
+    }
+
+    function getProjectInteractiveReport(project = {}) {
+        return project.interactiveReport ||
+            (project.validationReport && project.validationReport.interactiveReport) ||
+            (project.generationReport && project.generationReport.interactiveReport) ||
+            null;
+    }
+
+    function isProjectInteractiveVerified(project = {}) {
+        const report = getProjectInteractiveReport(project);
+        return Boolean(project.deliveryReady === true && report && report.ok === true);
+    }
+
+    function applyInteractiveReportToProject(project, report, repairAttempts = project && project.repairAttempts || 0) {
+        if (!project || typeof project !== 'object') return project;
+        const normalizedReport = {
+            ...buildInteractiveReportPatch(report),
+            ...report,
+            ok: Boolean(report && report.ok),
+            testedAt: report && report.testedAt || new Date().toISOString()
+        };
+        project.interactiveReport = normalizedReport;
+        project.deliveryReady = normalizedReport.ok === true;
+        project.qualityTier = qualityTierFromInteractiveReport(normalizedReport);
+        project.repairAttempts = repairAttempts;
+        project.validationReport = {
+            ...(project.validationReport || {}),
+            interactiveReport: normalizedReport,
+            deliveryReady: project.deliveryReady,
+            qualityTier: project.qualityTier
+        };
+        project.generationReport = {
+            ...(project.generationReport || {}),
+            interactiveReport: normalizedReport,
+            deliveryReady: project.deliveryReady,
+            qualityTier: project.qualityTier,
+            repairAttempts
+        };
+        return project;
+    }
+
+    async function runAIDirectInteractiveSelfTest(project, options = {}) {
+        const report = {
+            ok: false,
+            rendered: false,
+            bridgeDetected: false,
+            startVerified: false,
+            inputVerified: false,
+            restartVerified: false,
+            stateChanged: false,
+            fatalErrors: [],
+            compatibilityFallbackUsed: false,
+            testedAt: new Date().toISOString()
+        };
+        const html = getAIDirectProjectHtml(project);
+        if (!html) {
+            report.fatalErrors.push('index.html missing or failed runnable validation');
+            return buildInteractiveReportPatch(report);
+        }
+        const iframe = document.createElement('iframe');
+        iframe.setAttribute('title', 'Gamia interactive self-test');
+        iframe.style.cssText = 'position:fixed;left:-10000px;top:0;width:800px;height:500px;opacity:0.01;pointer-events:none;border:0;';
+        let loadResolved = false;
+        const loadPromise = new Promise(resolve => {
+            iframe.addEventListener('load', () => {
+                loadResolved = true;
+                resolve(true);
+            }, { once: true });
+        });
+        document.body.appendChild(iframe);
+        iframe.srcdoc = html;
+        await Promise.race([loadPromise, waitForMs(options.loadTimeoutMs || 3500)]);
+        if (!loadResolved) report.fatalErrors.push('preview iframe did not finish loading');
+        try {
+            const win = iframe.contentWindow;
+            const doc = iframe.contentDocument || (win && win.document);
+            if (!win || !doc || !doc.body) {
+                report.fatalErrors.push('preview iframe document is unavailable');
+                return buildInteractiveReportPatch(report);
+            }
+            win.addEventListener('error', event => {
+                report.fatalErrors.push(event.message || 'iframe runtime error');
+            });
+            win.addEventListener('unhandledrejection', event => {
+                report.fatalErrors.push((event.reason && (event.reason.message || String(event.reason))) || 'iframe promise rejection');
+            });
+            await waitForMs(250);
+            const initialCanvas = canvasHashFromDocument(doc);
+            const visibleText = String(doc.body.innerText || '').trim();
+            report.rendered = initialCanvas.ok || visibleText.length > 8;
+            report.canvas = initialCanvas;
+            const bridge = win.__GAMIA_GAME__;
+            report.bridgeDetected = Boolean(bridge && typeof bridge === 'object');
+            report.bridgeVersion = bridge && bridge.version || '';
+            const bridgeComplete = Boolean(
+                bridge &&
+                typeof bridge.start === 'function' &&
+                typeof bridge.restart === 'function' &&
+                typeof bridge.dispatchInput === 'function' &&
+                typeof bridge.getState === 'function'
+            );
+            report.bridgeComplete = bridgeComplete;
+            if (!bridgeComplete) {
+                report.fatalErrors.push('window.__GAMIA_GAME__ bridge is missing required methods');
+                if (options.allowLegacyFallback) {
+                    report.compatibilityFallbackUsed = true;
+                    const canvas = doc.querySelector('canvas');
+                    if (canvas) canvas.dispatchEvent(new MouseEvent('click', { bubbles: true, clientX: canvas.width / 2, clientY: canvas.height / 2 }));
+                    win.dispatchEvent(new KeyboardEvent('keydown', { key: 'Enter', code: 'Enter', bubbles: true }));
+                    win.dispatchEvent(new KeyboardEvent('keydown', { key: ' ', code: 'Space', bubbles: true }));
+                    await waitForMs(800);
+                    const afterFallback = canvasHashFromDocument(doc);
+                    report.stateChanged = initialCanvas.hash !== afterFallback.hash;
+                    report.startVerified = report.stateChanged;
+                    report.inputVerified = report.stateChanged;
+                    report.restartVerified = false;
+                }
+                return {
+                    ...buildInteractiveReportPatch(report),
+                    qualityTier: qualityTierFromInteractiveReport(report)
+                };
+            }
+            const beforeState = normalizeInteractiveState(await callRuntimeBridge(bridge, 'getState'));
+            const beforeCanvas = canvasHashFromDocument(doc);
+            await callRuntimeBridge(bridge, 'start');
+            await waitForMs(800);
+            const afterStartState = normalizeInteractiveState(await callRuntimeBridge(bridge, 'getState'));
+            const afterStartCanvas = canvasHashFromDocument(doc);
+            const startChanged = statesDiffer(beforeState, afterStartState) || beforeCanvas.hash !== afterStartCanvas.hash;
+            report.startVerified = startChanged || afterStartState.status === 'running';
+            await callRuntimeBridge(bridge, 'dispatchInput', { key: 'ArrowRight', code: 'ArrowRight', type: 'keydown', direction: 'right' });
+            await waitForMs(650);
+            const afterInputState = normalizeInteractiveState(await callRuntimeBridge(bridge, 'getState'));
+            const afterInputCanvas = canvasHashFromDocument(doc);
+            report.inputVerified = statesDiffer(afterStartState, afterInputState) || afterStartCanvas.hash !== afterInputCanvas.hash;
+            await callRuntimeBridge(bridge, 'restart');
+            await waitForMs(650);
+            const afterRestartState = normalizeInteractiveState(await callRuntimeBridge(bridge, 'getState'));
+            const afterRestartCanvas = canvasHashFromDocument(doc);
+            report.restartVerified = statesDiffer(afterInputState, afterRestartState) || afterInputCanvas.hash !== afterRestartCanvas.hash || ['idle', 'running'].includes(afterRestartState.status);
+            report.stateChanged = report.startVerified || report.inputVerified || report.restartVerified;
+            report.status = afterRestartState.status || afterInputState.status || afterStartState.status || beforeState.status || '';
+            report.hudVerified = /score|timer|time|goal|wave|hp|life|lives|restart|start|serve|order|target/i.test(visibleText || doc.body.textContent || html);
+            report.ok = Boolean(report.rendered && bridgeComplete && report.startVerified && report.inputVerified && report.restartVerified && report.hudVerified && !report.fatalErrors.length);
+            report.qualityTier = qualityTierFromInteractiveReport(report);
+            return {
+                ...buildInteractiveReportPatch(report),
+                ...report
+            };
+        } catch (error) {
+            report.fatalErrors.push(error && (error.message || String(error)) || 'interactive self-test failed');
+            return buildInteractiveReportPatch(report);
+        } finally {
+            iframe.remove();
+        }
+    }
+
+    function buildInteractiveRepairPrompt(project, interactiveReport, spec, attempt) {
+        const html = getAIDirectProjectHtml(project);
+        return [
+            'Repair this generated HTML5 Canvas game so it passes Gamia interactive self-test.',
+            'Return strict JSON only: {"files":[{"path":"index.html","content":"<!DOCTYPE html>..."}],"report":{"summary":"","changes":[],"controls":[]}}.',
+            '',
+            'Do not redesign the game. Preserve gameplay, visuals, title, and rules unless required to fix interaction.',
+            'Focus only on runtime bridge, start, input handling, restart, HUD/state feedback, and canvas visibility.',
+            'No external dependencies, CDN, remote assets, modules, or network calls.',
+            '',
+            GAMIA_RUNTIME_BRIDGE_PROMPT,
+            '',
+            `Repair attempt: ${attempt}`,
+            `GameSpec:\n${JSON.stringify(spec || {}, null, 2)}`,
+            `Failed interactiveReport:\n${JSON.stringify(interactiveReport || {}, null, 2)}`,
+            '',
+            `Current index.html:\n${html}`
+        ].join('\n').slice(0, 26000);
+    }
+
+    async function repairAIDirectProjectForInteraction(project, interactiveReport, spec, productionPlan, productionBrief, activeModel, attempt = 1) {
+        const repairEventId = addExecutionEvent(
+            `Repairing interaction issues (${attempt}/2)`,
+            'running',
+            interactiveReport ? JSON.stringify(interactiveReport, null, 2).slice(0, 1200) : ''
+        );
+        const response = await aiService.stageChat('/api/chat', [
+            {
+                role: 'system',
+                content: `You are a senior HTML5 Canvas game runtime engineer. Return strict JSON only. Repair generated games to expose ${GAMIA_RUNTIME_BRIDGE_VERSION} and pass deterministic interaction tests. ${getLanguageInstruction()}`
+            },
+            {
+                role: 'user',
+                content: buildInteractiveRepairPrompt(project, interactiveReport, spec, attempt)
+            }
+        ], {
+            provider: activeModel.providerId,
+            model: activeModel.modelId,
+            maxTokens: 18000,
+            phase: 'AI direct interactive repair'
+        });
+        const parsed = extractModelJsonObject(response.content, 'AI direct interactive repair');
+        const { html, files } = extractHtmlFromModelProjectPayload(parsed, 'AI direct interactive repair');
+        const validationReport = validateAIDirectHtml(html);
+        updateExecutionEvent(repairEventId, {
+            status: validationReport.ok ? 'done' : 'failed',
+            title: validationReport.ok ? 'Interaction repair returned runnable HTML' : 'Interaction repair validation failed',
+            detail: validationReport.message
+        });
+        if (!validationReport.ok) {
+            const error = createAIFlowError(
+                'INTERACTIVE_REPAIR_INVALID',
+                'schema_failure',
+                'Interaction repair failed validation',
+                'The model attempted to repair the game, but the returned HTML was not runnable.',
+                validationReport.message,
+                ['retry', 'switch_model', 'manual_queue']
+            );
+            error.interactiveReport = interactiveReport;
+            throw error;
+        }
+        const repairReport = parsed.report || {
+            summary: 'Repaired runtime bridge and interaction handlers for Gamia playable self-test.',
+            changes: ['Added or fixed window.__GAMIA_GAME__ bridge', 'Connected start/input/restart to game state'],
+            controls: []
+        };
+        const codeFiles = normalizeModelGeneratedFiles(files).some(file => String(file.path || '').toLowerCase() === 'index.html')
+            ? normalizeModelGeneratedFiles(files)
+            : [{ path: 'index.html', content: html }];
+        return normalizeGeneratedProject({
+            ...project,
+            codeFiles: [
+                ...codeFiles,
+                {
+                    path: 'generation-report.json',
+                    content: JSON.stringify({
+                        ...(project.generationReport || {}),
+                        interactiveRepair: repairReport,
+                        repairAttempts: attempt
+                    }, null, 2),
+                    language: 'json',
+                    kind: 'report'
+                }
+            ],
+            validationReport: {
+                ...(project.validationReport || {}),
+                ...validationReport
+            },
+            generationReport: {
+                ...(project.generationReport || {}),
+                interactiveRepair: repairReport,
+                repairAttempts: attempt
+            },
+            repairAttempts: attempt,
+            fallbackReason: project.fallbackReason || ''
+        }, latestGenerationPlan, spec, activeModel, 'ai_direct');
+    }
+
+    function createInteractiveSelfTestError(project, report) {
+        const failed = report && Array.isArray(report.failed) ? report.failed.join(', ') : '';
+        const error = createAIFlowError(
+            'INTERACTIVE_SELF_TEST_FAILED',
+            'schema_failure',
+            'Generated game could not pass playable self-test',
+            'The game rendered, but it did not pass Start, input, and Restart interaction tests, so it was not delivered to the workspace.',
+            failed || (report && report.fatalErrors || []).join('; '),
+            ['retry', 'switch_model', 'manual_queue']
+        );
+        error.interactiveReport = report;
+        error.project = project;
+        return error;
+    }
+
+    async function ensureAIDirectProjectDeliveryReady(project, spec, productionPlan, productionBrief, activeModel, progress = null) {
+        let candidate = project;
+        let report = null;
+        const maxRepairs = 2;
+        for (let attempt = 0; attempt <= maxRepairs; attempt += 1) {
+            if (progress && progress.workfeedHandle) {
+                updateChatWorkfeedStep(progress.workfeedHandle, 'render_check', {
+                    status: 'running',
+                    summary: attempt ? 'Checking repaired preview rendering...' : 'Checking rendered preview...'
+                });
+            }
+            report = await runAIDirectInteractiveSelfTest(candidate, { allowLegacyFallback: false });
+            applyInteractiveReportToProject(candidate, report, attempt);
+            if (progress && progress.workfeedHandle) {
+                updateChatWorkfeedStep(progress.workfeedHandle, 'render_check', {
+                    status: report.rendered ? 'done' : 'failed',
+                    summary: report.rendered ? 'Rendered. Testing controls completed.' : 'Preview did not render a visible game surface.'
+                });
+                updateChatWorkfeedStep(progress.workfeedHandle, 'start_test', {
+                    status: report.startVerified ? 'done' : 'failed',
+                    summary: report.startVerified ? 'Start changed game state.' : 'Start did not change game state.'
+                });
+                updateChatWorkfeedStep(progress.workfeedHandle, 'input_test', {
+                    status: report.inputVerified ? 'done' : 'failed',
+                    summary: report.inputVerified ? 'Input changed state or canvas.' : 'Input did not produce a verified change.'
+                });
+                updateChatWorkfeedStep(progress.workfeedHandle, 'restart_test', {
+                    status: report.restartVerified ? 'done' : 'failed',
+                    summary: report.restartVerified ? 'Restart returned the game to a playable state.' : 'Restart could not be verified.'
+                });
+            }
+            if (report.ok) {
+                if (progress && progress.workfeedHandle) {
+                    updateChatWorkfeedStep(progress.workfeedHandle, 'self_test', {
+                        status: 'done',
+                        summary: 'Playable demo verified.'
+                    });
+                    updateChatWorkfeedStep(progress.workfeedHandle, 'repair_interaction', {
+                        status: attempt ? 'done' : 'skipped',
+                        summary: attempt ? `Interaction repair passed after ${attempt} attempt${attempt === 1 ? '' : 's'}.` : 'No interaction repair needed.'
+                    });
+                }
+                candidate.deliveryReady = true;
+                candidate.qualityTier = 'playable';
+                return candidate;
+            }
+            if (attempt >= maxRepairs) break;
+            if (progress && progress.workfeedHandle) {
+                updateChatWorkfeedStep(progress.workfeedHandle, 'self_test', {
+                    status: 'warning',
+                    summary: 'Interactive self-test failed. Repairing interaction issue...'
+                });
+                updateChatWorkfeedStep(progress.workfeedHandle, 'repair_interaction', {
+                    status: 'running',
+                    summary: `Repairing interaction issue (${attempt + 1}/${maxRepairs})...`
+                });
+            }
+            candidate = await repairAIDirectProjectForInteraction(candidate, report, spec, productionPlan, productionBrief, activeModel, attempt + 1);
+        }
+        if (progress && progress.workfeedHandle) {
+            updateChatWorkfeedStep(progress.workfeedHandle, 'self_test', {
+                status: 'failed',
+                summary: 'Playable self-test did not pass after repair attempts.'
+            });
+            updateChatWorkfeedStep(progress.workfeedHandle, 'repair_interaction', {
+                status: 'failed',
+                summary: `Interaction repair could not produce a verified playable demo after ${maxRepairs} attempts.`
+            });
+        }
+        throw createInteractiveSelfTestError(candidate, report);
     }
 
     function hasGeneratedFilePath(codeFiles, predicate) {
@@ -8972,6 +9483,10 @@ Lock Game Type to "Bullet Hell / Flying Shooter" and genre to "bullet-hell".`
         const previewUrl = localPreviewUrl || remotePreviewUrl;
         const report = project['generation-report.json'] || project.generationReport || project.generationReportJson || project.report || null;
         const validationReport = project.validationReport || project.validation || null;
+        const interactiveReport = project.interactiveReport ||
+            (validationReport && validationReport.interactiveReport) ||
+            (report && report.interactiveReport) ||
+            null;
         const modelMeta = project.modelMeta || data.modelMeta || {
             providerId: activeModel.providerId,
             modelId: activeModel.modelId,
@@ -9021,6 +9536,10 @@ Lock Game Type to "Bullet Hell / Flying Shooter" and genre to "bullet-hell".`
             codeFiles,
             generationReport: report,
             validationReport,
+            interactiveReport,
+            deliveryReady: project.deliveryReady === true || Boolean(interactiveReport && interactiveReport.ok === true),
+            qualityTier: project.qualityTier || qualityTierFromInteractiveReport(interactiveReport || {}),
+            repairAttempts: Number(project.repairAttempts || (report && report.repairAttempts) || 0),
             modelMeta,
             generationMode: project.generationMode || data.generationMode || mode,
             projectMeta: normalizeProjectMeta(project, plan && plan.generatedSpec ? plan.generatedSpec : spec, previewUrl),
@@ -9203,7 +9722,11 @@ Lock Game Type to "Bullet Hell / Flying Shooter" and genre to "bullet-hell".`
                         responsive: true,
                         externalDependencies: false,
                         preferredPackaging: 'single-file-first',
-                        generationMode: 'ai_direct'
+                        generationMode: 'ai_direct',
+                        runtimeBridge: GAMIA_RUNTIME_BRIDGE_VERSION,
+                        interactiveSelfTest: true,
+                        deliveryReadyRequired: true,
+                        runtimeBridgeContract: GAMIA_RUNTIME_BRIDGE_PROMPT
                     }
                 })
             });
@@ -9257,7 +9780,8 @@ Lock Game Type to "Bullet Hell / Flying Shooter" and genre to "bullet-hell".`
             });
             throw classifyAIFlowError(error, 'AI direct game generation');
         }
-        const project = normalizeGeneratedProject(data, latestGenerationPlan, spec, activeModel, 'ai_direct');
+        let project = normalizeGeneratedProject(data, latestGenerationPlan, spec, activeModel, 'ai_direct');
+        project = await ensureAIDirectProjectDeliveryReady(project, spec, productionPlan, productionBrief, activeModel, progress);
         const modelDetail = project.modelMeta && project.modelMeta.fallbackUsed
             ? `\nModel fallback: requested ${project.modelMeta.requestedProviderId || activeModel.providerId}/${project.modelMeta.requestedModelId || activeModel.modelId}, used ${project.modelMeta.providerId}/${project.modelMeta.modelId}`
             : '';
@@ -9535,13 +10059,18 @@ Lock Game Type to "Bullet Hell / Flying Shooter" and genre to "bullet-hell".`
                     externalDependencies: false,
                     preserveGameplay: true,
                     generationMode: 'ai_direct_edit',
+                    runtimeBridge: GAMIA_RUNTIME_BRIDGE_VERSION,
+                    interactiveSelfTest: true,
+                    deliveryReadyRequired: true,
+                    runtimeBridgeContract: GAMIA_RUNTIME_BRIDGE_PROMPT,
                     editRegion: target && target.region ? target.region : '',
                     editLevelHint: target && target.levelHint ? target.levelHint : ''
                 }
             })
         });
         const data = await parseJsonResponse(response);
-        return normalizeGeneratedProject(data, plan, sourceSpec, activeModel, 'ai_direct_edit');
+        const editedProject = normalizeGeneratedProject(data, plan, sourceSpec, activeModel, 'ai_direct_edit');
+        return await ensureAIDirectProjectDeliveryReady(editedProject, sourceSpec, plan && plan.productionPlan, plan && plan.productionBrief, activeModel, null);
     }
 
     function reloadSrcdocPreviewFrame(frame) {
@@ -9625,7 +10154,7 @@ Lock Game Type to "Bullet Hell / Flying Shooter" and genre to "bullet-hell".`
                     summary: 'Calling the selected AI model for the playable core.'
                 });
             }
-            if (progress) progress.setStage('generate', 15, 70, AI_DIRECT_GENERATION_TIMEOUT_MS, 'Building playable core, then polishing the final version...');
+            if (progress) progress.setStage('generate', 15, 70, AI_DIRECT_GENERATION_TIMEOUT_MS, 'Building playable core, then testing the demo...');
             const project = await withTimeout(
                 generateAIDirectGameProject(sourceSpec, plan.productionPlan || latestGamePlan, plan.productionBrief || '', progress),
                 AI_DIRECT_GENERATION_TIMEOUT_MS,
@@ -9639,15 +10168,15 @@ Lock Game Type to "Bullet Hell / Flying Shooter" and genre to "bullet-hell".`
                 syncGenerationPipelineWorkfeed(progress.workfeedHandle, project);
             }
             if (progress) progress.completeStage('generate');
-            if (progress) progress.setStage('validate', 70, 90, 5000, 'Validating generated game...');
+            if (progress) progress.setStage('validate', 70, 90, 5000, 'Testing playable demo...');
             assertGenerationNotCancelled(cancelToken);
-            addExecutionEvent('Validating generated game', project.validationReport && project.validationReport.ok === false ? 'warning' : 'done', project.validationReport ? JSON.stringify(project.validationReport, null, 2).slice(0, 1200) : 'Backend validation report accepted.');
+            addExecutionEvent('Testing playable demo', project.interactiveReport && project.interactiveReport.ok === true ? 'done' : 'warning', project.interactiveReport ? JSON.stringify(project.interactiveReport, null, 2).slice(0, 1200) : 'Playable self-test report missing.');
             if (progress && progress.workfeedHandle) {
                 updateChatWorkfeedStep(progress.workfeedHandle, 'final_validation', {
-                    status: project.validationReport && project.validationReport.ok === false ? 'warning' : 'done',
-                    summary: project.validationReport
-                        ? (project.validationReport.ok === false ? 'Backend validation returned issues to review.' : 'Backend validation passed.')
-                        : 'Backend validation report received.'
+                    status: project.interactiveReport && project.interactiveReport.ok === true ? 'done' : 'warning',
+                    summary: project.interactiveReport && project.interactiveReport.ok === true
+                        ? 'Playable demo passed interaction self-test.'
+                        : 'Rendered preview exists, but playable self-test did not confirm delivery.'
                 });
                 updateChatWorkfeedStep(progress.workfeedHandle, 'preview', {
                     status: 'running',
@@ -9677,7 +10206,7 @@ Lock Game Type to "Bullet Hell / Flying Shooter" and genre to "bullet-hell".`
             if (isGenerationCancelled(error)) throw error;
             addExecutionEvent('Generation failed', 'failed', error && (error.message || String(error)), { open: true });
             if (progress && progress.workfeedHandle) {
-                failChatWorkfeed(progress.workfeedHandle, 'core_playable', error && (error.message || String(error)));
+                failGenerationWorkfeed(progress.workfeedHandle, error, 'AI direct generation failed.');
             }
             recordDiagnostic('ai-direct-generation-failed', {
                 phase: 'AI direct game generation',
@@ -10200,7 +10729,7 @@ Lock Game Type to "Bullet Hell / Flying Shooter" and genre to "bullet-hell".`
     }
 
     const WORKSPACE_INDEXED_DB_NAME = 'droi_workspace_runtime';
-    const WORKSPACE_INDEXED_DB_VERSION = 1;
+    const WORKSPACE_INDEXED_DB_VERSION = 2;
     const WORKSPACE_STORE = 'workspaces';
     const WORKSPACE_CURRENT_STORE = 'current';
     const WORKSPACE_ACTIVE_HINT_KEY = 'gamia_active_workspace_hint';
@@ -10240,28 +10769,41 @@ Lock Game Type to "Bullet Hell / Flying Shooter" and genre to "bullet-hell".`
     async function workspaceDbPut(storeName, value) {
         const db = await openWorkspaceRuntimeDb();
         if (!db) return false;
+        if (!db.objectStoreNames.contains(storeName)) return false;
         return new Promise(resolve => {
-            const tx = db.transaction(storeName, 'readwrite');
-            tx.objectStore(storeName).put(value);
-            tx.oncomplete = () => resolve(true);
-            tx.onerror = () => {
-                console.warn('[Droi] Workspace snapshot write failed', tx.error);
+            let tx = null;
+            try {
+                tx = db.transaction(storeName, 'readwrite');
+                tx.objectStore(storeName).put(value);
+                tx.oncomplete = () => resolve(true);
+                tx.onerror = () => {
+                    console.warn('[Droi] Workspace snapshot write failed', tx.error);
+                    resolve(false);
+                };
+            } catch (error) {
+                console.warn('[Droi] Workspace snapshot write failed', error);
                 resolve(false);
-            };
+            }
         });
     }
 
     async function workspaceDbGet(storeName, key) {
         const db = await openWorkspaceRuntimeDb();
         if (!db) return null;
+        if (!db.objectStoreNames.contains(storeName)) return null;
         return new Promise(resolve => {
-            const tx = db.transaction(storeName, 'readonly');
-            const request = tx.objectStore(storeName).get(key);
-            request.onsuccess = () => resolve(request.result || null);
-            request.onerror = () => {
-                console.warn('[Droi] Workspace snapshot read failed', request.error);
+            try {
+                const tx = db.transaction(storeName, 'readonly');
+                const request = tx.objectStore(storeName).get(key);
+                request.onsuccess = () => resolve(request.result || null);
+                request.onerror = () => {
+                    console.warn('[Droi] Workspace snapshot read failed', request.error);
+                    resolve(null);
+                };
+            } catch (error) {
+                console.warn('[Droi] Workspace snapshot read failed', error);
                 resolve(null);
-            };
+            }
         });
     }
 
@@ -14136,12 +14678,12 @@ console.log('Droi generated game:', GAME_TITLE);`
             const coverReady = Boolean(cover.url || cover.path || cover.status === 'generated' || cover.status === 'provided' || cover.status === 'preview_screenshot');
             const project = plan && plan.generatedProject ? plan.generatedProject : {};
             const previewReady = workspace.dataset.previewStatus === 'verified'
-                || project.validationReport?.browserRender?.ok === true;
+                && isProjectInteractiveVerified(project);
             return [
                 { id: 'title', label: 'Project name', ok: Boolean(String(meta.title || meta.projectName || '').trim()) },
                 { id: 'description', label: 'English description', ok: Boolean(String(meta.description || meta.englishDescription || '').trim()) },
                 { id: 'cover', label: 'Preview image or cover', ok: coverReady },
-                { id: 'preview', label: 'Playable preview verified', ok: previewReady }
+                { id: 'preview', label: 'Playable demo verified', ok: previewReady }
             ];
         }
 
@@ -14459,7 +15001,7 @@ console.log('Droi generated game:', GAME_TITLE);`
                 if (event.detail && event.detail.status === 'verified') ensurePreviewScreenshotCoverFallback();
                 updateWorkspacePublishState();
             });
-            if (plan && plan.generatedProject && plan.generatedProject.validationReport?.browserRender?.ok === true) {
+            if (plan && plan.generatedProject && isProjectInteractiveVerified(plan.generatedProject)) {
                 window.setTimeout(() => ensurePreviewScreenshotCoverFallback(), 800);
             }
             refreshProjectInfoFields();
@@ -15652,8 +16194,47 @@ console.log('Droi generated game:', GAME_TITLE);`
             const previewButtons = container.querySelectorAll('[data-game-action="preview"]');
             const mobilePreviewToggle = container.querySelector('[data-game-action="mobile-preview-toggle"]');
             const playableShell = container.querySelector('.playable-shell');
+            const projectInteractiveReady = isProjectInteractiveVerified(plan && plan.generatedProject ? plan.generatedProject : {});
+            const callIframeBridge = async (method, ...args) => {
+                try {
+                    const win = previewFrame.contentWindow;
+                    const bridge = win && win.__GAMIA_GAME__;
+                    if (bridge && typeof bridge[method] === 'function') {
+                        await Promise.resolve(bridge[method](...args));
+                        return true;
+                    }
+                } catch (error) {
+                    iframePreviewErrorLog.push(error && (error.message || String(error)));
+                }
+                return false;
+            };
+            const dispatchLegacyIframeStart = () => {
+                try {
+                    const win = previewFrame.contentWindow;
+                    const doc = previewFrame.contentDocument || (win && win.document);
+                    const canvas = doc && doc.querySelector && doc.querySelector('canvas');
+                    if (canvas) {
+                        canvas.focus && canvas.focus();
+                        canvas.dispatchEvent(new MouseEvent('click', { bubbles: true, clientX: canvas.width / 2, clientY: canvas.height / 2 }));
+                    }
+                    if (win) {
+                        win.focus && win.focus();
+                        win.dispatchEvent(new KeyboardEvent('keydown', { key: 'Enter', code: 'Enter', bubbles: true }));
+                        win.dispatchEvent(new KeyboardEvent('keydown', { key: ' ', code: 'Space', bubbles: true }));
+                    }
+                    return true;
+                } catch (error) {
+                    iframePreviewErrorLog.push(error && (error.message || String(error)));
+                    return false;
+                }
+            };
             if (restartBtn) restartBtn.addEventListener('click', () => {
-                if (previewFrame.srcdoc) {
+                callIframeBridge('restart').then(handled => {
+                    if (handled) {
+                        previewFrame.focus();
+                        return;
+                    }
+                    if (previewFrame.srcdoc) {
                     const html = previewFrame.srcdoc;
                     previewFrame.srcdoc = '';
                     window.setTimeout(() => {
@@ -15661,11 +16242,17 @@ console.log('Droi generated game:', GAME_TITLE);`
                     }, 0);
                     return;
                 }
-                previewFrame.src = previewFrame.src;
+                    previewFrame.src = previewFrame.src;
+                });
             });
             if (pauseBtn) {
                 pauseBtn.textContent = 'Start';
-                pauseBtn.addEventListener('click', () => previewFrame.focus());
+                pauseBtn.addEventListener('click', () => {
+                    callIframeBridge('start').then(handled => {
+                        if (!handled) dispatchLegacyIframeStart();
+                        previewFrame.focus();
+                    });
+                });
             }
             previewButtons.forEach(previewButton => {
                 previewButton.addEventListener('click', () => {
@@ -15720,7 +16307,7 @@ console.log('Droi generated game:', GAME_TITLE);`
                 if (repairActions) repairActions.hidden = !failed;
                 const previewStatus = container.querySelector('.preview-play-head [data-preview-status]');
                 if (previewStatus) {
-                    if (playable) previewStatus.textContent = 'Playable verified';
+                    if (playable) previewStatus.textContent = 'Playable demo verified';
                     else if (failed) previewStatus.textContent = 'Preview failed';
                     else previewStatus.textContent = text || 'Rendering';
                 }
@@ -15798,8 +16385,8 @@ console.log('Droi generated game:', GAME_TITLE);`
                 const fatalText = /uncaught|syntaxerror|referenceerror|typeerror|failed to/i.test(text);
                 const visibleDom = Boolean(text && text.length > 8 && doc.body.getBoundingClientRect().height > 10);
                 if (paintedCanvas || (visibleDom && !fatalText)) {
-                    setStageLabel('Playable preview verified');
-                    setPreviewStatus('verified');
+                    setStageLabel(projectInteractiveReady ? 'Playable demo verified' : 'Rendered. Testing controls required');
+                    setPreviewStatus(projectInteractiveReady ? 'verified' : 'rendered');
                     setPreviewDiagnostic('', false);
                     return true;
                 }
@@ -15927,7 +16514,9 @@ console.log('Droi generated game:', GAME_TITLE);`
                 },
                 getConfig() { return iframeVisualTheme ? { visualTheme: iframeVisualTheme } : {}; },
                 reset() {
-                    if (previewFrame.srcdoc) {
+                    callIframeBridge('restart').then(handled => {
+                        if (handled) return;
+                        if (previewFrame.srcdoc) {
                         const html = previewFrame.srcdoc;
                         previewFrame.srcdoc = '';
                         window.setTimeout(() => {
@@ -15935,9 +16524,12 @@ console.log('Droi generated game:', GAME_TITLE);`
                         }, 0);
                         return;
                     }
-                    previewFrame.src = previewFrame.src;
+                        previewFrame.src = previewFrame.src;
+                    });
                 },
-                setPaused() {}
+                setPaused(nextPaused) {
+                    callIframeBridge(nextPaused ? 'pause' : 'resume');
+                }
             };
             if (projectHtml) {
                 window.setTimeout(validateIframePainted, 500);
@@ -16817,9 +17409,12 @@ HTML5 Constraints: Canvas, playable, responsive, no external dependencies, singl
             'function resize(){const dpr=Math.max(1,window.devicePixelRatio||1);canvas.width=Math.floor(window.innerWidth*dpr);canvas.height=Math.floor(window.innerHeight*dpr);ctx.setTransform(dpr,0,0,dpr,0,0);}',
             'function drawCloud(x,y,s){ctx.fillStyle="rgba(255,255,255,.18)";ctx.beginPath();ctx.arc(x,y,s,0,Math.PI*2);ctx.arc(x+s*.8,y+s*.1,s*.8,0,Math.PI*2);ctx.arc(x-s*.8,y+s*.2,s*.7,0,Math.PI*2);ctx.fill();}',
             'function draw(){const w=window.innerWidth,h=window.innerHeight;t+=0.016;if(running)score+=1;ctx.clearRect(0,0,w,h);const g=ctx.createLinearGradient(0,0,0,h);g.addColorStop(0,"#151922");g.addColorStop(.55,"#0E1117");g.addColorStop(1,"#0B0D12");ctx.fillStyle=g;ctx.fillRect(0,0,w,h);for(let i=0;i<10;i++){drawCloud((i*180+t*18)% (w+180)-90,80+(i%4)*62,28+(i%3)*10);}ctx.fillStyle="#5EE7FF";ctx.beginPath();ctx.ellipse(player.x/960*w,player.y/540*h,18,26,0,0,Math.PI*2);ctx.fill();ctx.fillStyle="#FFD166";ctx.beginPath();ctx.arc(player.x/960*w,player.y/540*h-16,7,0,Math.PI*2);ctx.fill();for(let i=0;i<32;i++){const a=i*.78+t*(running?1.8:.35);const cx=w/2+Math.cos(a)*(120+(i%5)*38);const cy=h/2+Math.sin(a*1.25)*(70+(i%6)*22);ctx.fillStyle=i%3?"#FF7AB6":"#9B8CFF";ctx.beginPath();ctx.arc(cx,cy,5+(i%4),0,Math.PI*2);ctx.fill();}ctx.fillStyle="rgba(255,255,255,.9)";ctx.font="700 16px system-ui";ctx.fillText("Score "+score,20,30);ctx.fillText("Lives "+player.lives,20,54);ctx.fillText("Energy "+player.energy+"%",20,78);ctx.fillText("Wave "+wave,20,102);if(!running){ctx.fillStyle="rgba(11,13,18,.58)";ctx.fillRect(0,0,w,h);ctx.fillStyle="#E8EAF0";ctx.font="800 28px system-ui";ctx.textAlign="center";ctx.fillText("Bloom Drift",w/2,h/2-18);ctx.font="600 15px system-ui";ctx.fillText("Click or press Space to start, P to pause, R to restart",w/2,h/2+18);ctx.textAlign="left";}requestAnimationFrame(draw);}',
-            'function restart(){score=0;wave=1;t=0;player.lives=3;player.energy=70;running=true;}',
+            'function restart(){score=0;wave=1;t=0;player.x=480;player.y=420;player.lives=3;player.energy=70;running=true;}',
+            'function dispatchInput(input){const key=(input&&input.key)||(input&&input.code)||"";if(key==="ArrowRight")player.x=Math.min(930,player.x+38);if(key==="ArrowLeft")player.x=Math.max(30,player.x-38);if(key==="ArrowUp")player.y=Math.max(30,player.y-30);if(key==="ArrowDown")player.y=Math.min(510,player.y+30);running=true;score+=5;return getState();}',
+            'function getState(){return{status:running?"running":"idle",tick:Math.floor(t*60),score,timer:t,player:{x:player.x,y:player.y},canInteract:true};}',
+            'window.__GAMIA_GAME__={version:"gamia-game-runtime-v1",start(){running=true;return getState();},restart,pause(){running=false;return getState();},resume(){running=true;return getState();},dispatchInput,getState};',
             'window.addEventListener("resize",resize);',
-            'window.addEventListener("keydown",e=>{if(e.code==="Space")running=true;if(e.key==="p"||e.key==="P")running=!running;if(e.key==="r"||e.key==="R")restart();});',
+            'window.addEventListener("keydown",e=>{if(e.code==="Space")running=true;if(e.key==="p"||e.key==="P")running=!running;if(e.key==="r"||e.key==="R")restart();dispatchInput({key:e.key,code:e.code});});',
             'canvas.addEventListener("click",()=>{running=true;});',
             'resize();draw();',
             '})();',
@@ -16828,6 +17423,17 @@ HTML5 Constraints: Canvas, playable, responsive, no external dependencies, singl
             '</html>'
         ].join('\n');
         const validationReport = validateAIDirectHtml(demoHtml);
+        const interactiveReport = {
+            ok: true,
+            rendered: true,
+            bridgeDetected: true,
+            startVerified: true,
+            inputVerified: true,
+            restartVerified: true,
+            stateChanged: true,
+            fatalErrors: [],
+            testedAt: new Date().toISOString()
+        };
         const project = normalizeGeneratedProject({
             projectId: 'demo-edit-workspace',
             title: 'Bloom Drift',
@@ -16862,7 +17468,15 @@ HTML5 Constraints: Canvas, playable, responsive, no external dependencies, singl
                     ]
                 }
             },
-            validationReport,
+            validationReport: {
+                ...validationReport,
+                interactiveReport,
+                deliveryReady: true,
+                qualityTier: 'playable'
+            },
+            interactiveReport,
+            deliveryReady: true,
+            qualityTier: 'playable',
             capabilities: {
                 supportsL1: true,
                 supportsL2: true,
@@ -16902,6 +17516,7 @@ HTML5 Constraints: Canvas, playable, responsive, no external dependencies, singl
             generationMode: 'ai_direct',
             aiDirectGeneration: {
                 validationReport,
+                interactiveReport,
                 modelMeta: { providerId: 'local', modelId: 'workspace-demo', label: 'Workspace demo' }
             }
         };
@@ -17746,7 +18361,13 @@ HTML5 Constraints: Canvas, playable, responsive, no external dependencies, singl
                     { id: 'gameplay_depth', label: 'Adding depth', status: 'queued', area: 'AI Direct pipeline' },
                     { id: 'ui_polish', label: 'Polishing UI', status: 'queued', area: 'AI Direct pipeline' },
                     { id: 'project_meta', label: 'Preparing project info', status: 'queued', area: 'AI Direct pipeline' },
-                    { id: 'final_validation', label: 'Validating preview', status: 'queued', area: 'Backend validation' },
+                    { id: 'final_validation', label: 'Checking rendered preview', status: 'queued', area: 'Backend validation' },
+                    { id: 'render_check', label: 'Checking rendered preview', status: 'queued', area: 'Playable self-test' },
+                    { id: 'start_test', label: 'Testing Start button', status: 'queued', area: 'Playable self-test' },
+                    { id: 'input_test', label: 'Testing player input', status: 'queued', area: 'Playable self-test' },
+                    { id: 'restart_test', label: 'Testing Restart', status: 'queued', area: 'Playable self-test' },
+                    { id: 'repair_interaction', label: 'Repairing interaction issues', status: 'queued', area: 'Playable self-test' },
+                    { id: 'self_test', label: 'Preparing playable demo', status: 'queued', area: 'Playable self-test' },
                     { id: 'preview', label: 'Preparing workspace preview', status: 'queued', area: 'Browser workspace' }
                 ],
                 onCancel: () => {
@@ -17803,7 +18424,7 @@ HTML5 Constraints: Canvas, playable, responsive, no external dependencies, singl
                 return;
             }
             const classified = progress.fail(error);
-            failChatWorkfeed(generationWorkfeed, 'core_playable', classified.message || classified.title || 'AI direct generation failed.');
+            failGenerationWorkfeed(generationWorkfeed, error && error.code ? error : classified, classified.message || classified.title || 'AI direct generation failed.');
             const tFail = setTimeout(() => {
                 if (progressContainer) progressContainer.style.display = 'none';
                 chatHistory.classList.remove('is-generating');
