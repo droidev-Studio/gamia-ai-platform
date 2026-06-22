@@ -1193,6 +1193,33 @@ document.addEventListener('DOMContentLoaded', () => {
             .replace(/\b(api[-_ ]?key|secret|access[-_ ]?token|refresh[-_ ]?token|authorization|token)\s*[:=]\s*["']?[^"'\s,;]{8,}/gi, '$1=[REDACTED]');
     }
 
+    function detectSensitiveText(value = '') {
+        const text = String(value || '');
+        const matches = [];
+        [
+            { id: 'authorization_bearer', pattern: /\bAuthorization\s*:\s*Bearer\s+[A-Za-z0-9._~+/=-]{8,}/gi },
+            { id: 'bearer_token', pattern: /\bBearer\s+[A-Za-z0-9._~+/=-]{16,}/gi },
+            { id: 'provider_token', pattern: /\b(?:sk|pk|rk|xox[baprs]|gh[pousr])[-_][A-Za-z0-9_=-]{12,}/gi },
+            { id: 'google_api_key', pattern: /\bAIza[0-9A-Za-z_-]{20,}\b/g },
+            { id: 'jwt_like_token', pattern: /\b[A-Za-z0-9_-]{24,}\.[A-Za-z0-9_-]{12,}\.[A-Za-z0-9_-]{12,}\b/g },
+            { id: 'assigned_secret', pattern: /\b(?:api[-_ ]?key|secret|access[-_ ]?token|refresh[-_ ]?token|authorization|token)\s*[:=]\s*["']?[^"'\s,;]{8,}/gi }
+        ].forEach(rule => {
+            if (rule.pattern.test(text)) matches.push(rule.id);
+            rule.pattern.lastIndex = 0;
+        });
+        return matches;
+    }
+
+    function sanitizeTextForPersistence(value = '') {
+        const text = String(value || '');
+        const sanitized = redactSensitiveText(text);
+        return {
+            content: sanitized,
+            redacted: sanitized !== text,
+            matches: detectSensitiveText(text)
+        };
+    }
+
     function redactSensitiveDeep(value, seen = new WeakSet()) {
         if (typeof value === 'string') return redactSensitiveText(value);
         if (value == null || typeof value !== 'object') return value;
@@ -5886,6 +5913,7 @@ Treat genre conventions as suggested, not confirmed, unless the user explicitly 
         const id = String(stageId || '');
         const aliases = {
             visual_enhance: 'art_ui_apply',
+            ui_polish: 'art_ui_apply',
             gameplay_depth: 'gameplay_fit',
             final_validation: 'final_self_test'
         };
@@ -5897,7 +5925,7 @@ Treat genre conventions as suggested, not confirmed, unless the user explicitly 
     }
 
     function isSoftPipelineStage(stageId = '') {
-        return new Set(['gameplay_fit', 'ui_polish']).has(normalizePipelineStageId(stageId));
+        return normalizePipelineStageId(stageId) === 'gameplay_fit';
     }
 
     function syncGenerationPipelineWorkfeed(handle, project = {}) {
@@ -5937,7 +5965,7 @@ Treat genre conventions as suggested, not confirmed, unless the user explicitly 
             ...(handle.job.meta || {}),
             activeAttemptId: event.attemptId || ''
         };
-        ['core_playable', 'art_ui_apply', 'gameplay_fit', 'ui_polish', 'project_meta', 'final_self_test', 'render_check', 'start_test', 'input_test', 'restart_test', 'repair_interaction', 'self_test', 'preview'].forEach(stepId => {
+        ['core_playable', 'art_ui_apply', 'gameplay_fit', 'project_meta', 'final_self_test', 'render_check', 'start_test', 'input_test', 'restart_test', 'repair_interaction', 'self_test', 'preview'].forEach(stepId => {
             updateChatWorkfeedStep(handle, stepId, {
                 status: 'queued',
                 summary: ''
@@ -5948,6 +5976,24 @@ Treat genre conventions as suggested, not confirmed, unless the user explicitly 
             summary: event.summary || 'Starting selected model pipeline.'
         });
         return handle;
+    }
+
+    function buildFinishedGameGenerationWorkfeedSteps() {
+        return [
+            { id: 'request', label: 'Understanding your game idea', status: 'running', summary: 'Using your confirmed task and selections.' },
+            { id: 'core_playable', label: 'Designing playable core', status: 'queued', area: 'AI Direct pipeline' },
+            { id: 'art_ui_apply', label: 'Applying art and UI resources', status: 'queued', area: 'AI Direct pipeline' },
+            { id: 'gameplay_fit', label: 'Fitting gameplay to your request', status: 'queued', area: 'AI Direct pipeline' },
+            { id: 'project_meta', label: 'Preparing project title and preview', status: 'queued', area: 'AI Direct pipeline' },
+            { id: 'final_self_test', label: 'Final playable game check', status: 'queued', area: 'Backend validation' },
+            { id: 'render_check', label: 'Checking rendered preview', status: 'queued', area: 'Playable self-test' },
+            { id: 'start_test', label: 'Testing Start button', status: 'queued', area: 'Playable self-test' },
+            { id: 'input_test', label: 'Testing player input', status: 'queued', area: 'Playable self-test' },
+            { id: 'restart_test', label: 'Testing Restart', status: 'queued', area: 'Playable self-test' },
+            { id: 'repair_interaction', label: 'Repairing interaction issues', status: 'queued', area: 'Playable self-test' },
+            { id: 'self_test', label: 'Testing controls and restart', status: 'queued', area: 'Playable self-test' },
+            { id: 'preview', label: 'Final playable game ready', status: 'queued', area: 'Browser workspace' }
+        ];
     }
 
     function failChatWorkfeed(handle, stepId, summary = '') {
@@ -9637,32 +9683,72 @@ Lock Game Type to "Bullet Hell / Flying Shooter" and genre to "bullet-hell".`
     }
 
     async function repairAIDirectProjectForInteraction(project, interactiveReport, spec, productionPlan, productionBrief, activeModel, attempt = 1) {
+        const contextBundle = buildRepairContextPack(project, interactiveReport, spec, attempt);
+        const codeFiles = contextBundle.relevantCodeFiles.map(file => ({
+            path: file.path,
+            content: String(file.content || '')
+        }));
         const repairEventId = addExecutionEvent(
             `Repairing interaction issues (${attempt}/2)`,
             'running',
             interactiveReport ? JSON.stringify(interactiveReport, null, 2).slice(0, 1200) : ''
         );
-        const response = await aiService.stageChat('/api/chat', [
-            {
-                role: 'system',
-                content: `You are a senior HTML5 Canvas game runtime engineer. Return strict JSON only. Repair generated games to expose ${GAMIA_RUNTIME_BRIDGE_VERSION} and pass deterministic interaction tests. ${getLanguageInstruction()}`
-            },
-            {
-                role: 'user',
-                content: buildInteractiveRepairPrompt(project, interactiveReport, spec, attempt)
-            }
-        ], {
-            provider: activeModel.providerId,
-            model: activeModel.modelId,
-            maxTokens: 18000,
-            phase: 'AI direct interactive repair'
+        recordDiagnostic('repair-context-pack', {
+            taskType: contextBundle.contextPack.taskType,
+            region: contextBundle.contextPack.region,
+            tokenEstimate: contextBundle.contextPack.tokenEstimate,
+            includedFiles: contextBundle.relevantCodeFiles.map(file => ({ path: file.path, includedSize: file.includedSize, originalSize: file.originalSize })),
+            failed: contextBundle.contextPack.failureReport && contextBundle.contextPack.failureReport.failed || []
         });
-        const parsed = extractModelJsonObject(response.content, 'AI direct interactive repair');
-        const { html, files } = extractHtmlFromModelProjectPayload(parsed, 'AI direct interactive repair');
-        const validationReport = validateAIDirectHtml(html);
+        const response = await fetch(apiUrl('/api/ai/edit-game-project'), {
+            method: 'POST',
+            credentials: 'include',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({
+                prompt: 'Repair the current game so it passes Gamia interactive self-test.',
+                editPrompt: 'Repair the current game so it passes Gamia interactive self-test. Preserve title, visuals, rules, and gameplay unless required to fix start/input/restart/onboarding.',
+                target: {
+                    itemId: 'runtime.selfTest',
+                    type: 'runtime',
+                    region: contextBundle.contextPack.region,
+                    levelHint: 'repair'
+                },
+                projectId: project.projectId || project.id || '',
+                previewUrl: project.previewUrl || '',
+                currentFiles: codeFiles,
+                relevantCodeFiles: codeFiles,
+                currentFileRefs: contextBundle.contextPack.includedRefs,
+                contextPack: contextBundle.contextPack,
+                taskType: contextBundle.contextPack.taskType,
+                region: contextBundle.contextPack.region,
+                baseRevision: contextBundle.contextPack.baseRevision,
+                summaryVersion: contextBundle.contextPack.summaryVersion,
+                gameSpec: spec,
+                provider: activeModel.providerId,
+                model: activeModel.modelId,
+                modelMeta: activeModel,
+                constraints: {
+                    runtime: 'HTML5 Canvas',
+                    playable: true,
+                    responsive: true,
+                    externalDependencies: false,
+                    preserveGameplay: true,
+                    generationMode: 'ai_direct_repair',
+                    runtimeBridge: GAMIA_RUNTIME_BRIDGE_VERSION,
+                    interactiveSelfTest: true,
+                    deliveryReadyRequired: true,
+                    runtimeBridgeContract: GAMIA_RUNTIME_BRIDGE_PROMPT,
+                    repairAttempt: attempt,
+                    failureReport: contextBundle.contextPack.failureReport
+                }
+            })
+        });
+        const data = await parseJsonResponse(response);
+        const repairedProject = normalizeGeneratedProject(data, latestGenerationPlan, spec, activeModel, 'ai_direct_repair');
+        const validationReport = repairedProject.validationReport || validateAIDirectHtml(getAIDirectProjectHtml(repairedProject));
         updateExecutionEvent(repairEventId, {
             status: validationReport.ok ? 'done' : 'failed',
-            title: validationReport.ok ? 'Interaction repair returned runnable HTML' : 'Interaction repair validation failed',
+            title: validationReport.ok ? 'Interaction repair returned backend revision' : 'Interaction repair validation failed',
             detail: validationReport.message
         });
         if (!validationReport.ok) {
@@ -9677,41 +9763,12 @@ Lock Game Type to "Bullet Hell / Flying Shooter" and genre to "bullet-hell".`
             error.interactiveReport = interactiveReport;
             throw error;
         }
-        const repairReport = parsed.report || {
-            summary: 'Repaired runtime bridge and interaction handlers for Gamia playable self-test.',
-            changes: ['Added or fixed window.__GAMIA_GAME__ bridge', 'Connected start/input/restart to game state'],
-            controls: []
+        repairedProject.repairAttempts = attempt;
+        repairedProject.generationReport = {
+            ...(repairedProject.generationReport || {}),
+            repairAttempts: attempt
         };
-        const codeFiles = normalizeModelGeneratedFiles(files).some(file => String(file.path || '').toLowerCase() === 'index.html')
-            ? normalizeModelGeneratedFiles(files)
-            : [{ path: 'index.html', content: html }];
-        return normalizeGeneratedProject({
-            ...project,
-            codeFiles: [
-                ...codeFiles,
-                {
-                    path: 'generation-report.json',
-                    content: JSON.stringify({
-                        ...(project.generationReport || {}),
-                        interactiveRepair: repairReport,
-                        repairAttempts: attempt
-                    }, null, 2),
-                    language: 'json',
-                    kind: 'report'
-                }
-            ],
-            validationReport: {
-                ...(project.validationReport || {}),
-                ...validationReport
-            },
-            generationReport: {
-                ...(project.generationReport || {}),
-                interactiveRepair: repairReport,
-                repairAttempts: attempt
-            },
-            repairAttempts: attempt,
-            fallbackReason: project.fallbackReason || ''
-        }, latestGenerationPlan, spec, activeModel, 'ai_direct');
+        return repairedProject;
     }
 
     function createInteractiveSelfTestError(project, report) {
@@ -9861,6 +9918,9 @@ Lock Game Type to "Bullet Hell / Flying Shooter" and genre to "bullet-hell".`
             normalizePipelineStageIdForTest(stageId = '') {
                 return normalizePipelineStageId(stageId);
             },
+            getGenerationWorkfeedStepsForTest() {
+                return buildFinishedGameGenerationWorkfeedSteps().map(step => ({ ...step }));
+            },
             buildProductionBriefForTest(plan = {}, spec = {}, options = {}) {
                 return buildProductionBriefText(plan, {
                     ...getCurrentGameSpec(),
@@ -9918,6 +9978,32 @@ Lock Game Type to "Bullet Hell / Flying Shooter" and genre to "bullet-hell".`
                     coreLoop: 'Read orders, brew tea, serve customers.',
                     visualDirection: 'Readable gothic tea-house UI.'
                 }, options.productionBrief || 'FinishedGameBrief for a complete playable 2D game.', options.prompt || 'Make a gothic tea house serving game.');
+            },
+            buildRepairContextPackForTest(options = {}) {
+                const html = String(options.html || '<!doctype html><html><body><canvas></canvas><script>window.__GAMIA_GAME__={start(){},restart(){},dispatchInput(){},getState(){return {status:"idle",tick:0,canInteract:true}}}</script></body></html>');
+                return buildRepairContextPack({
+                    projectId: 'test-repair-project',
+                    revisionId: 'rev-test',
+                    codeFiles: [
+                        { path: 'index.html', content: html, language: 'html', kind: 'runtime' },
+                        { path: 'generation-report.json', content: JSON.stringify({ summary: 'Repair test report' }, null, 2), language: 'json', kind: 'report' }
+                    ],
+                    generationReport: { summary: 'Repair test report' },
+                    projectMeta: { title: 'Repair Test' }
+                }, options.interactiveReport || {
+                    rendered: true,
+                    bridgeDetected: true,
+                    startVerified: false,
+                    inputVerified: false,
+                    restartVerified: false,
+                    fatalErrors: ['start did not change state']
+                }, options.spec || getCurrentGameSpec(), options.attempt || 1);
+            },
+            sanitizeWorkspaceExportEntriesForTest(entries = []) {
+                return sanitizeWorkspaceExportEntries(entries);
+            },
+            stripSensitiveWorkspaceKeysForTest(value = {}) {
+                return stripSensitiveWorkspaceKeys(value);
             },
             setWorkspaceInteractiveReport(report = {}) {
                 const workspace = document.querySelector('[data-game-workspace]');
@@ -10887,6 +10973,76 @@ Lock Game Type to "Bullet Hell / Flying Shooter" and genre to "bullet-hell".`
         return {
             task,
             contextPack: pack
+        };
+    }
+
+    function buildRepairContextPack(project = {}, interactiveReport = {}, spec = getCurrentGameSpec(), attempt = 1) {
+        const task = {
+            taskType: 'repair',
+            region: 'runtime/self-test'
+        };
+        const budgetTokens = CONTEXT_PACK_BUDGETS.repair;
+        const allFiles = buildWorkspaceCodeFiles(project, spec, null);
+        const selected = selectContextPackFiles(allFiles, task, budgetTokens);
+        const normalizedFailure = buildInteractiveReportPatch(interactiveReport || {});
+        const failedChecks = Array.isArray(normalizedFailure.failed) ? [...normalizedFailure.failed] : [];
+        const fatalErrors = Array.isArray(normalizedFailure.fatalErrors) ? [...normalizedFailure.fatalErrors] : [];
+        const report = project.generationReport || {};
+        const meta = project.projectMeta || {};
+        const rollingSummary = {
+            schema: 'gamia-rolling-summary/v1',
+            summaryVersion: Number(project.summaryVersion || report.summaryVersion || 0) + attempt,
+            updatedAt: new Date().toISOString(),
+            currentGame: meta.title || report.title || spec.title || spec.gameType || 'Generated game',
+            playerGoal: spec.playerGoal || report.objective || '',
+            confirmedGameSpec: redactSensitiveDeep(spec),
+            appliedChanges: [`Repair attempt ${attempt}: fix failed playable self-test without redesigning the game.`],
+            negativeConstraints: [
+                'Do not redesign the game or change user-confirmed gameplay unless required for interaction repair.',
+                'No external dependencies, CDN, remote images, imports, fetch, XHR, WebSocket, cookies, or secrets.'
+            ],
+            codeResourceMap: allFiles.map(summarizeFileForContext).slice(0, 20),
+            recentFailuresAndRepair: {
+                interactiveOk: false,
+                failed: [...failedChecks],
+                fatalErrors: [...fatalErrors]
+            },
+            mustPreserveNext: [
+                'Preserve current title, visuals, rules, and core loop.',
+                'Repair Gamia runtime bridge start/restart/dispatchInput/getState.',
+                'Keep onboarding, HUD/objective feedback, canvas rendering, and responsive iframe behavior working.'
+            ]
+        };
+        const pack = redactSensitiveDeep({
+            schema: CONTEXT_PACK_VERSION,
+            taskType: task.taskType,
+            region: task.region,
+            prompt: 'Repair interaction self-test failure for the current playable game.',
+            budgetTokens,
+            tokenEstimate: 0,
+            projectId: project.projectId || project.id || '',
+            baseRevision: project.revisionId || project.currentRevisionId || '',
+            summaryVersion: rollingSummary.summaryVersion,
+            rollingSummary,
+            recentTurns: chatTranscript.slice(-3),
+            failureReport: {
+                ...normalizedFailure,
+                failed: [...failedChecks],
+                fatalErrors: [...fatalErrors]
+            },
+            includedRefs: selected.refs,
+            includedSummaries: [
+                { type: 'repair_failure_report', failed: [...failedChecks] },
+                { type: 'workspace_rolling_summary', summaryVersion: rollingSummary.summaryVersion }
+            ],
+            omittedReason: selected.omitted,
+            createdAt: new Date().toISOString()
+        });
+        pack.tokenEstimate = estimateContextTokens(pack) + estimateContextTokens(selected.files);
+        return {
+            task,
+            contextPack: pack,
+            relevantCodeFiles: selected.files
         };
     }
 
@@ -11906,6 +12062,7 @@ canvas, svg, video, img {
         const seen = new WeakSet();
         const scrub = input => {
             if (input == null) return input;
+            if (typeof input === 'string') return redactSensitiveText(input);
             if (typeof input !== 'object') return input;
             if (seen.has(input)) return undefined;
             seen.add(input);
@@ -11943,6 +12100,77 @@ canvas, svg, video, img {
             }
         }
         return plan;
+    }
+
+    function parseGenerationReportFile(codeFiles = [], fallback = null) {
+        const reportFile = (Array.isArray(codeFiles) ? codeFiles : []).find(file => String(file.path || '').toLowerCase() === 'generation-report.json');
+        if (!reportFile || !reportFile.content) return fallback;
+        try {
+            return JSON.parse(String(reportFile.content || '{}'));
+        } catch (error) {
+            return fallback;
+        }
+    }
+
+    async function hydrateWorkspacePlanFromBackend(snapshot, plan) {
+        if (!snapshot || !plan || !plan.generatedProject) return plan;
+        const project = plan.generatedProject;
+        const projectId = snapshot.projectId || project.projectId || project.id || '';
+        const revisionId = project.currentRevisionId || project.revisionId || snapshot.currentRevisionId || snapshot.revisionId || '';
+        if (!projectId) return plan;
+        try {
+            const revisionPath = revisionId
+                ? `/api/projects/${encodeURIComponent(projectId)}/revisions/${encodeURIComponent(revisionId)}`
+                : `/api/projects/${encodeURIComponent(projectId)}/revisions`;
+            const response = await fetch(apiUrl(revisionPath), {
+                method: 'GET',
+                credentials: 'include',
+                headers: { 'Accept': 'application/json' }
+            });
+            if (!response.ok) return plan;
+            const data = await response.json();
+            const codeFiles = Array.isArray(data.codeFiles) ? data.codeFiles.map(normalizeAIDirectCodeFile) : [];
+            if (!codeFiles.length) return plan;
+            const restoredRevisionId = data.revision && data.revision.revisionId || revisionId || project.currentRevisionId || project.revisionId || '';
+            const remotePreviewUrl = restoredRevisionId
+                ? `/generated/${projectId}/revisions/${restoredRevisionId}/index.html`
+                : `/generated/${projectId}/index.html`;
+            const localPreviewUrl = createLocalAIDirectPreviewUrl(codeFiles);
+            const report = parseGenerationReportFile(codeFiles, project.generationReport || null);
+            const hydratedPlan = JSON.parse(JSON.stringify(plan));
+            hydratedPlan.generatedProject = {
+                ...hydratedPlan.generatedProject,
+                projectId,
+                id: projectId,
+                revisionId: restoredRevisionId,
+                currentRevisionId: restoredRevisionId,
+                codeFiles,
+                previewUrl: localPreviewUrl || remotePreviewUrl,
+                remotePreviewUrl,
+                generationReport: report,
+                validationReport: project.validationReport || report?.validationReport || null,
+                interactiveReport: project.interactiveReport || report?.interactiveReport || null,
+                cloudCheckpoint: true,
+                backendProjectRef: {
+                    projectId,
+                    revisionId: restoredRevisionId,
+                    codeBundleRef: data.revision && data.revision.codeBundleRef || ''
+                }
+            };
+            recordDiagnostic('workspace-backend-restore', {
+                projectId,
+                revisionId: restoredRevisionId,
+                files: codeFiles.map(file => file.path)
+            });
+            return hydratedPlan;
+        } catch (error) {
+            recordDiagnostic('workspace-backend-restore-skipped', {
+                projectId,
+                revisionId,
+                message: error && (error.message || String(error))
+            });
+            return plan;
+        }
     }
 
     function isRecentWorkspaceSnapshot(snapshot) {
@@ -12029,16 +12257,23 @@ canvas, svg, video, img {
         const identity = ensureWorkspaceIdentity(workspace, plan);
         const state = getWorkspaceState(workspace);
         const sourcePlan = plan || workspace.__plan || workspace.__generationPlan || null;
+        const project = sourcePlan && sourcePlan.generatedProject ? sourcePlan.generatedProject : {};
         const now = new Date().toISOString();
         state.updatedAt = now;
         return stripSensitiveWorkspaceKeys({
             schemaVersion: 1,
             workspaceId: identity.workspaceId,
             projectId: identity.projectId,
+            currentRevisionId: project.currentRevisionId || project.revisionId || '',
             createdAt: state.createdAt || now,
             updatedAt: now,
             storageMode: 'local-first',
-            cloudCheckpoint: false,
+            cloudCheckpoint: Boolean(project.currentRevisionId || project.revisionId),
+            backendProjectRef: project.backendProjectRef || {
+                projectId: project.projectId || project.id || identity.projectId,
+                revisionId: project.currentRevisionId || project.revisionId || '',
+                codeBundleRef: ''
+            },
             uiState: collectWorkspaceUiState(workspace),
             draft: collectWorkspaceDraft(workspace),
             projectInfo: collectWorkspaceProjectInfoDraft(workspace),
@@ -12052,15 +12287,22 @@ canvas, svg, video, img {
 
     function collectWorkspacePlanSnapshot(plan, reason = 'generation_project_ready') {
         const projectId = resolveWorkspaceProjectId(plan);
+        const project = plan && plan.generatedProject ? plan.generatedProject : {};
         const now = new Date().toISOString();
         return stripSensitiveWorkspaceKeys({
             schemaVersion: 1,
             workspaceId: localWorkspaceId(projectId),
             projectId,
+            currentRevisionId: project.currentRevisionId || project.revisionId || '',
             createdAt: now,
             updatedAt: now,
             storageMode: 'local-first',
-            cloudCheckpoint: false,
+            cloudCheckpoint: Boolean(project.currentRevisionId || project.revisionId),
+            backendProjectRef: project.backendProjectRef || {
+                projectId: project.projectId || project.id || projectId,
+                revisionId: project.currentRevisionId || project.revisionId || '',
+                codeBundleRef: ''
+            },
             uiState: {
                 generatedView: 'preview',
                 workspaceMode: 'beginner',
@@ -13307,6 +13549,40 @@ console.log('Droi generated game:', GAME_TITLE);`
         });
     }
 
+    function shouldOmitWorkspaceExportPath(path = '') {
+        const normalized = normalizeWorkspacePath(path).toLowerCase();
+        return /(^|\/)\.env(?:\.|$)|api[-_]?key|secret|credential|rawcredential|authorization|access[-_]?token|refresh[-_]?token/.test(normalized);
+    }
+
+    function sanitizeWorkspaceExportEntries(entries = []) {
+        const sanitized = [];
+        const warnings = [];
+        (Array.isArray(entries) ? entries : []).forEach(entry => {
+            const path = normalizeWorkspacePath(entry.path || 'file.txt');
+            if (shouldOmitWorkspaceExportPath(path)) {
+                warnings.push(`Omitted sensitive-looking file path from ZIP: ${path}`);
+                return;
+            }
+            if (entry.bytes) {
+                sanitized.push(entry);
+                return;
+            }
+            const result = sanitizeTextForPersistence(entry.content || '');
+            if (result.redacted || result.matches.length) {
+                warnings.push(`Redacted sensitive-looking content in ${path}: ${Array.from(new Set(result.matches)).join(', ') || 'pattern match'}`);
+            }
+            sanitized.push({
+                ...entry,
+                path,
+                content: result.content
+            });
+        });
+        return {
+            files: sanitized,
+            warnings
+        };
+    }
+
     function buildWorkspaceExportFiles(workspace, plan) {
         const project = plan && plan.generatedProject ? plan.generatedProject : null;
         const generated = plan && plan.generatedSpec ? plan.generatedSpec : null;
@@ -13351,7 +13627,19 @@ console.log('Droi generated game:', GAME_TITLE);`
         ].join('\n'));
         const unique = new Map();
         files.forEach(file => unique.set(normalizeWorkspacePath(file.path), file));
-        return Array.from(unique.values()).sort((a, b) => a.path.localeCompare(b.path));
+        const sanitized = sanitizeWorkspaceExportEntries(Array.from(unique.values()));
+        if (sanitized.warnings.length) {
+            sanitized.files.push({
+                path: 'SECURITY_SCAN.txt',
+                content: [
+                    'Gamia export security scan',
+                    'Sensitive-looking values were redacted or omitted before this ZIP was created.',
+                    '',
+                    ...sanitized.warnings
+                ].join('\n')
+            });
+        }
+        return sanitized.files.sort((a, b) => a.path.localeCompare(b.path));
     }
 
     function safeZipName(name = 'droi-generated-game') {
@@ -18731,7 +19019,8 @@ HTML5 Constraints: Canvas, playable, responsive, no external dependencies, singl
         if (promptDraft.trim()) return false;
         const snapshot = await loadActiveWorkspaceSnapshot();
         if (!snapshot || !isRecentWorkspaceSnapshot(snapshot)) return false;
-        const plan = reviveWorkspaceGenerationPlan(snapshot);
+        let plan = reviveWorkspaceGenerationPlan(snapshot);
+        plan = await hydrateWorkspacePlanFromBackend(snapshot, plan);
         if (!plan || !plan.generatedProject || !Array.isArray(plan.generatedProject.codeFiles) || !plan.generatedProject.codeFiles.length) {
             return false;
         }
@@ -19454,22 +19743,7 @@ HTML5 Constraints: Canvas, playable, responsive, no external dependencies, singl
                 title: 'Creating a finished playable game with the selected AI model',
                 subtitle: 'Using your confirmed GameSpec, art/UI requirements, and validation signals.',
                 cancelable: true,
-                steps: [
-                    { id: 'request', label: 'Understanding your game idea', status: 'running', summary: 'Using your confirmed task and selections.' },
-                    { id: 'core_playable', label: 'Designing playable core', status: 'queued', area: 'AI Direct pipeline' },
-                    { id: 'art_ui_apply', label: 'Applying art and UI resources', status: 'queued', area: 'AI Direct pipeline' },
-                    { id: 'gameplay_fit', label: 'Fitting gameplay to your request', status: 'queued', area: 'AI Direct pipeline' },
-                    { id: 'ui_polish', label: 'Preparing finished UI', status: 'queued', area: 'AI Direct pipeline' },
-                    { id: 'project_meta', label: 'Preparing project title and preview', status: 'queued', area: 'AI Direct pipeline' },
-                    { id: 'final_self_test', label: 'Final playable game check', status: 'queued', area: 'Backend validation' },
-                    { id: 'render_check', label: 'Checking rendered preview', status: 'queued', area: 'Playable self-test' },
-                    { id: 'start_test', label: 'Testing Start button', status: 'queued', area: 'Playable self-test' },
-                    { id: 'input_test', label: 'Testing player input', status: 'queued', area: 'Playable self-test' },
-                    { id: 'restart_test', label: 'Testing Restart', status: 'queued', area: 'Playable self-test' },
-                    { id: 'repair_interaction', label: 'Repairing interaction issues', status: 'queued', area: 'Playable self-test' },
-                    { id: 'self_test', label: 'Testing controls and restart', status: 'queued', area: 'Playable self-test' },
-                    { id: 'preview', label: 'Final playable game ready', status: 'queued', area: 'Browser workspace' }
-                ],
+                steps: buildFinishedGameGenerationWorkfeedSteps(),
                 onCancel: () => {
                     if (cancelToken.cancelled) return;
                     cancelToken.cancelled = true;
