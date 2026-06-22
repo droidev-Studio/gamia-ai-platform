@@ -6049,8 +6049,9 @@ Treat genre conventions as suggested, not confirmed, unless the user explicitly 
         const hasPreview = Boolean(project.previewUrl || getAIDirectProjectHtml(project));
         const hasIndex = hasProjectCodeFile(project, /(?:^|\/)index\.html$/i) || Boolean(getAIDirectProjectHtml(project));
         const hasReport = hasProjectCodeFile(project, /(?:^|\/)generation-report\.json$/i) || Boolean(project.generationReport);
+        const hasProjectMetaFile = hasProjectCodeFile(project, /(?:^|\/)project-meta\.json$/i);
         const projectMeta = project.projectMeta || (project.generationReport && project.generationReport.projectMeta) || {};
-        const projectMetaReady = projectMeta.ready === true || Boolean(projectMeta.title || projectMeta.projectName || projectMeta.englishDescription);
+        const projectMetaReady = projectMeta.ready === true && hasProjectMetaFile;
         const artUiApplied = hasFinishedArtUiEvidence(project);
         const finishedPlayableReady = project.finishedPlayableReady ?? project.generationReport?.finishedPlayableReady;
 
@@ -8950,7 +8951,9 @@ Lock Game Type to "Bullet Hell / Flying Shooter" and genre to "bullet-hell".`
         'getState() must return a general state object such as { status, tick, canInteract, player?, signals?, capabilities? }.',
         'Use signals for game-specific proof, for example { score?, timer?, progress?, lives?, objective?, custom? }.',
         'Do not invent score or timer when the game does not use them; capabilities should say which signals exist.',
-        'start/restart/dispatchInput must change at least one observable signal, state field, player position, objective/progress value, custom signal, or the canvas within 1000ms.'
+        'start/restart/dispatchInput must change at least one observable signal, state field, player position, objective/progress value, custom signal, or the canvas within 1000ms.',
+        'The first playable screen must visibly explain the goal, controls, and next action in plain language.',
+        'Do not rely only on abstract HUD labels such as Coins, Recipes, HP, or Score; tell the player what to do now.'
     ].join('\n');
 
     function validateAIDirectHtml(html) {
@@ -8969,6 +8972,7 @@ Lock Game Type to "Bullet Hell / Flying Shooter" and genre to "bullet-hell".`
             { id: 'no_external_dependencies', label: 'No external dependencies', ok: !hasExternalDependency, critical: true },
             { id: 'responsive', label: 'Responsive layout', ok: /viewport|resize|innerWidth|innerHeight|100vw|100vh|max-width/i.test(source), critical: false },
             { id: 'runtime_bridge', label: 'Gamia runtime bridge', ok: hasRuntimeBridge, critical: false },
+            { id: 'first_screen_guidance', label: 'First-screen goal, controls, and next action', ok: /goal|objective|mission|task|how to play|controls?|click|tap|press|next|first|then|serve|brew|collect|survive|order|customer/i.test(source), critical: false },
             { id: 'playable_states', label: 'Playable HUD and states', ok: /score|points|coin|life|hp|timer|time|combo|restart|pause|start|game over|victory|win|fail|分数|金币|生命|倒计时|连击|重新|暂停|开始|胜利|失败/i.test(source), critical: false }
         ];
         const failedCritical = checks.filter(check => check.critical && !check.ok);
@@ -8997,6 +9001,8 @@ Lock Game Type to "Bullet Hell / Flying Shooter" and genre to "bullet-hell".`
             '- Make it responsive to desktop and mobile viewport sizes.',
             '- Include start, pause, restart, win, and fail states when relevant.',
             '- Include HUD feedback such as score, lives/health, timer, combo, coins, or progress based on the brief.',
+            '- First screen must include readable How to play guidance: goal/objective, controls, and the next action.',
+            '- For mouse, touch, or button-driven games, label the primary action and the order of operations.',
             '- Avoid placeholder-only screens, explanation-only output, or black/empty canvas.',
             '- Expose the mandatory runtime bridge exactly as window.__GAMIA_GAME__.',
             '',
@@ -9284,6 +9290,40 @@ Lock Game Type to "Bullet Hell / Flying Shooter" and genre to "bullet-hell".`
         }
     }
 
+    function getDocumentReadableText(doc) {
+        if (!doc || !doc.body) return '';
+        const chunks = [];
+        try {
+            const walker = doc.createTreeWalker(doc.body, NodeFilter.SHOW_TEXT);
+            while (walker.nextNode()) {
+                const node = walker.currentNode;
+                const parent = node && node.parentElement;
+                if (!parent || /^(script|style|noscript|template)$/i.test(parent.tagName || '')) continue;
+                const text = String(node.nodeValue || '').replace(/\s+/g, ' ').trim();
+                if (text) chunks.push(text);
+            }
+            doc.querySelectorAll('[aria-label], [title], [alt]').forEach(element => {
+                ['aria-label', 'title', 'alt'].forEach(attr => {
+                    const text = String(element.getAttribute(attr) || '').replace(/\s+/g, ' ').trim();
+                    if (text) chunks.push(text);
+                });
+            });
+        } catch (error) {
+            chunks.push(String(doc.body.textContent || '').replace(/\s+/g, ' ').trim());
+        }
+        return chunks.join(' ').replace(/\s+/g, ' ').trim();
+    }
+
+    function getHtmlReadableText(html) {
+        try {
+            const parsed = new DOMParser().parseFromString(String(html || ''), 'text/html');
+            parsed.querySelectorAll('script, style, noscript, template').forEach(node => node.remove());
+            return getDocumentReadableText(parsed);
+        } catch (error) {
+            return '';
+        }
+    }
+
     async function callRuntimeBridge(bridge, method, ...args) {
         if (!bridge || typeof bridge[method] !== 'function') return undefined;
         return await Promise.resolve(bridge[method](...args));
@@ -9296,6 +9336,7 @@ Lock Game Type to "Bullet Hell / Flying Shooter" and genre to "bullet-hell".`
         if (!report.startVerified) failed.push('start');
         if (!report.inputVerified) failed.push('input');
         if (!report.restartVerified) failed.push('restart');
+        if (!report.onboardingVerified) failed.push('onboarding');
         return {
             ok: false,
             rendered: Boolean(report.rendered),
@@ -9303,6 +9344,10 @@ Lock Game Type to "Bullet Hell / Flying Shooter" and genre to "bullet-hell".`
             startVerified: Boolean(report.startVerified),
             inputVerified: Boolean(report.inputVerified),
             restartVerified: Boolean(report.restartVerified),
+            onboardingVerified: Boolean(report.onboardingVerified),
+            objectiveVerified: Boolean(report.objectiveVerified),
+            controlsVerified: Boolean(report.controlsVerified),
+            nextActionVerified: Boolean(report.nextActionVerified),
             stateChanged: Boolean(report.stateChanged),
             failed,
             fatalErrors: Array.isArray(report.fatalErrors) ? report.fatalErrors : []
@@ -9364,6 +9409,10 @@ Lock Game Type to "Bullet Hell / Flying Shooter" and genre to "bullet-hell".`
             startVerified: false,
             inputVerified: false,
             restartVerified: false,
+            objectiveVerified: false,
+            controlsVerified: false,
+            nextActionVerified: false,
+            onboardingVerified: false,
             stateChanged: false,
             fatalErrors: [],
             compatibilityFallbackUsed: false,
@@ -9403,11 +9452,20 @@ Lock Game Type to "Bullet Hell / Flying Shooter" and genre to "bullet-hell".`
             });
             await waitForMs(250);
             const initialCanvas = canvasHashFromDocument(doc);
-            const visibleText = String(doc.body.innerText || doc.body.textContent || '').trim();
+            const visibleText = getDocumentReadableText(doc);
             const hasCanvasElement = Boolean(doc.querySelector('canvas'));
             const hudPattern = /score|timer|time|goal|objective|progress|wave|hp|life|lives|restart|start|serve|order|target|task|customer|combo|move/i;
             const sourceHasHudText = hudPattern.test(visibleText || html);
             report.hudVerified = sourceHasHudText || hudPattern.test(doc.body.textContent || html);
+            const guidanceText = `${visibleText}\n${getHtmlReadableText(html)}`.trim();
+            const objectivePattern = /goal|objective|mission|task|target|win|survive|collect|serve|order|customer|brew|recipe|protect|reach|escape|defeat|clear|deliver|match|build/i;
+            const controlsPattern = /controls?|how to play|click|tap|press|drag|arrow|wasd|space|enter|button|mouse|touch|start|restart|serve|teapot|use/i;
+            const nextActionPattern = /next|first|then|start|begin|serve|brew|choose|select|press|click|tap|follow|use|drag|move/i;
+            report.guidanceTextSample = guidanceText.slice(0, 240);
+            report.objectiveVerified = objectivePattern.test(guidanceText);
+            report.controlsVerified = controlsPattern.test(guidanceText);
+            report.nextActionVerified = nextActionPattern.test(guidanceText);
+            report.onboardingVerified = report.objectiveVerified && report.controlsVerified && report.nextActionVerified;
             report.rendered = initialCanvas.ok || visibleText.length > 8 || report.hudVerified;
             report.canvas = initialCanvas;
             const bridge = win.__GAMIA_GAME__;
@@ -9472,7 +9530,7 @@ Lock Game Type to "Bullet Hell / Flying Shooter" and genre to "bullet-hell".`
                 restartChanged: restartDiff,
                 capabilities: afterInputState.capabilities || afterStartState.capabilities || beforeState.capabilities || {}
             };
-            report.ok = Boolean(report.rendered && bridgeComplete && report.startVerified && report.inputVerified && report.restartVerified && report.hudVerified && !report.fatalErrors.length);
+            report.ok = Boolean(report.rendered && bridgeComplete && report.startVerified && report.inputVerified && report.restartVerified && report.hudVerified && report.onboardingVerified && !report.fatalErrors.length);
             report.qualityTier = qualityTierFromInteractiveReport(report);
             return {
                 ...buildInteractiveReportPatch(report),
@@ -9493,7 +9551,8 @@ Lock Game Type to "Bullet Hell / Flying Shooter" and genre to "bullet-hell".`
             'Return strict JSON only: {"files":[{"path":"index.html","content":"<!DOCTYPE html>..."}],"report":{"summary":"","changes":[],"controls":[]}}.',
             '',
             'Do not redesign the game. Preserve gameplay, visuals, title, and rules unless required to fix interaction.',
-            'Focus only on runtime bridge, start, input handling, restart, HUD/state feedback, and canvas visibility.',
+            'Focus only on runtime bridge, start, input handling, restart, HUD/state feedback, first-screen how-to-play guidance, and canvas visibility.',
+            'If onboarding failed, add visible plain-language text for Goal, Controls, and Next action without changing the core game.',
             'No external dependencies, CDN, remote assets, modules, or network calls.',
             '',
             GAMIA_RUNTIME_BRIDGE_PROMPT,
@@ -9724,6 +9783,9 @@ Lock Game Type to "Bullet Hell / Flying Shooter" and genre to "bullet-hell".`
                     repairAttempts: project.repairAttempts,
                     interactiveReport: project.interactiveReport
                 };
+            },
+            getFinishedPlayableGateStatusForProject(project = {}) {
+                return getFinishedPlayableGateStatus(project);
             },
             setWorkspaceInteractiveReport(report = {}) {
                 const workspace = document.querySelector('[data-game-workspace]');
@@ -13204,6 +13266,54 @@ console.log('Droi generated game:', GAME_TITLE);`
         }
     }
 
+    function compactHowToPlayLine(value, fallback, max = 120) {
+        const raw = Array.isArray(value)
+            ? value.map(item => firstText(item)).filter(Boolean).join(', ')
+            : firstText(value);
+        const text = String(raw || fallback || '').replace(/\s+/g, ' ').trim();
+        if (!text) return '';
+        return text.length > max ? `${text.slice(0, Math.max(0, max - 1)).trim()}...` : text;
+    }
+
+    function getWorkspaceHowToPlayInfo(generated = {}, project = null, projectMeta = {}) {
+        const report = project && project.generationReport && typeof project.generationReport === 'object' ? project.generationReport : {};
+        const gameplay = generated && generated.gameplay && typeof generated.gameplay === 'object' ? generated.gameplay : {};
+        const userSpec = generated && generated.userSpec && typeof generated.userSpec === 'object' ? generated.userSpec : {};
+        const controls = normalizeStringList(
+            report.controls || gameplay.controls || (generated.ui && generated.ui.controls),
+            []
+        );
+        const requirements = normalizeStringList(report.requirements, []);
+        const controlRequirement = requirements.find(item => /control|click|tap|press|arrow|wasd|button|input|keyboard|mouse|touch/i.test(item));
+        const goal = compactHowToPlayLine(
+            report.objective || report.goal || gameplay.goal || userSpec.playerGoal || userSpec.goal || projectMeta.description || generated.meta?.description,
+            'Complete the main objective shown in the game.',
+            132
+        );
+        const controlsText = compactHowToPlayLine(
+            controls.length ? controls : controlRequirement,
+            'Press Start, then use the visible buttons, Arrow keys, click, or tap as prompted.',
+            128
+        );
+        const nextAction = compactHowToPlayLine(
+            report.nextAction || report.firstAction || gameplay.nextAction,
+            'Press Start, then follow the in-game prompt or use the primary action button.',
+            118
+        );
+        return { goal, controls: controlsText, nextAction };
+    }
+
+    function buildWorkspaceHowToPlayHtml(generated, project, projectMeta) {
+        const info = getWorkspaceHowToPlayInfo(generated, project, projectMeta);
+        return [
+            '<div class="workspace-how-to-play" data-workspace-how-to-play aria-label="How to play this game">',
+            `<span><strong>Goal</strong>${escapeHtml(info.goal)}</span>`,
+            `<span><strong>Controls</strong>${escapeHtml(info.controls)}</span>`,
+            `<span><strong>Next</strong>${escapeHtml(info.nextAction)}</span>`,
+            '</div>'
+        ].join('');
+    }
+
     function buildGeneratedEditWorkspaceHtml(generated, project = null) {
         const previewUrl = project && project.previewUrl ? resolvePreviewUrl(project.previewUrl) : '';
         const projectMeta = (project && project.projectMeta) || normalizeProjectMeta(project || {}, generated || {}, previewUrl);
@@ -13324,6 +13434,7 @@ console.log('Droi generated game:', GAME_TITLE);`
             `<button type="button" class="game-preview-btn web-preview-trigger" data-game-action="preview" data-preview-url="${escapeHtml(previewUrl)}">Open</button>`,
             '</div>',
             '</div>',
+            buildWorkspaceHowToPlayHtml(generated, project, projectMeta),
             `<div class="game-preview-viewport" ${previewAttributes}>`,
             previewMarkup,
             '</div>',
@@ -17802,6 +17913,10 @@ HTML5 Constraints: Canvas, playable, responsive, no external dependencies, singl
             startVerified: true,
             inputVerified: true,
             restartVerified: true,
+            objectiveVerified: true,
+            controlsVerified: true,
+            nextActionVerified: true,
+            onboardingVerified: true,
             stateChanged: true,
             fatalErrors: [],
             testedAt: new Date().toISOString()
