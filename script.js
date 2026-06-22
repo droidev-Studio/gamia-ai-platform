@@ -9509,9 +9509,32 @@ Lock Game Type to "Bullet Hell / Flying Shooter" and genre to "bullet-hell".`
         }
     }
 
+    const RUNTIME_BRIDGE_CALL_TIMEOUT_MS = 900;
+
+    function runtimeBridgeTimeoutResult(method) {
+        return {
+            __gamiaBridgeTimedOut: true,
+            method,
+            status: 'timeout',
+            signals: {
+                bridgeTimeout: method
+            },
+            capabilities: {
+                hasRuntimeBridgeTimeout: true
+            }
+        };
+    }
+
+    function isRuntimeBridgeTimeoutResult(value) {
+        return Boolean(value && typeof value === 'object' && value.__gamiaBridgeTimedOut === true);
+    }
+
     async function callRuntimeBridge(bridge, method, ...args) {
         if (!bridge || typeof bridge[method] !== 'function') return undefined;
-        return await Promise.resolve(bridge[method](...args));
+        return await Promise.race([
+            Promise.resolve().then(() => bridge[method](...args)),
+            waitForMs(RUNTIME_BRIDGE_CALL_TIMEOUT_MS).then(() => runtimeBridgeTimeoutResult(method))
+        ]);
     }
 
     function buildInteractiveReportPatch(report = {}) {
@@ -9534,6 +9557,7 @@ Lock Game Type to "Bullet Hell / Flying Shooter" and genre to "bullet-hell".`
             controlsVerified: Boolean(report.controlsVerified),
             nextActionVerified: Boolean(report.nextActionVerified),
             stateChanged: Boolean(report.stateChanged),
+            bridgeTimeouts: Array.isArray(report.bridgeTimeouts) ? report.bridgeTimeouts : [],
             failed,
             fatalErrors: Array.isArray(report.fatalErrors) ? report.fatalErrors : []
         };
@@ -9668,6 +9692,7 @@ Lock Game Type to "Bullet Hell / Flying Shooter" and genre to "bullet-hell".`
             nextActionVerified: false,
             onboardingVerified: false,
             stateChanged: false,
+            bridgeTimeouts: [],
             fatalErrors: [],
             compatibilityFallbackUsed: false,
             testedAt: new Date().toISOString()
@@ -9679,6 +9704,7 @@ Lock Game Type to "Bullet Hell / Flying Shooter" and genre to "bullet-hell".`
         }
         const iframe = document.createElement('iframe');
         iframe.setAttribute('title', 'Gamia interactive self-test');
+        applyGeneratedPreviewFrameSecurity(iframe);
         iframe.style.cssText = 'position:fixed;left:-10000px;top:0;width:800px;height:500px;opacity:0.01;pointer-events:none;border:0;';
         let loadResolved = false;
         const loadPromise = new Promise(resolve => {
@@ -9753,24 +9779,40 @@ Lock Game Type to "Bullet Hell / Flying Shooter" and genre to "bullet-hell".`
                     qualityTier: qualityTierFromInteractiveReport(report)
                 };
             }
-            const beforeState = normalizeInteractiveState(await callRuntimeBridge(bridge, 'getState'));
+            const rememberBridgeTimeout = value => {
+                if (!isRuntimeBridgeTimeoutResult(value)) return;
+                const method = value.method || 'unknown';
+                if (!report.bridgeTimeouts.includes(method)) report.bridgeTimeouts.push(method);
+            };
+            const beforeStateRaw = await callRuntimeBridge(bridge, 'getState');
+            rememberBridgeTimeout(beforeStateRaw);
+            const beforeState = normalizeInteractiveState(beforeStateRaw);
             const beforeCanvas = canvasHashFromDocument(doc);
-            await callRuntimeBridge(bridge, 'start');
+            const startResult = await callRuntimeBridge(bridge, 'start');
+            rememberBridgeTimeout(startResult);
             await waitForMs(800);
-            const afterStartState = normalizeInteractiveState(await callRuntimeBridge(bridge, 'getState'));
+            const afterStartStateRaw = await callRuntimeBridge(bridge, 'getState');
+            rememberBridgeTimeout(afterStartStateRaw);
+            const afterStartState = normalizeInteractiveState(afterStartStateRaw);
             const afterStartCanvas = canvasHashFromDocument(doc);
             const startDiff = getInteractiveStateDiff(beforeState, afterStartState);
             const startChanged = startDiff.length > 0 || beforeCanvas.hash !== afterStartCanvas.hash;
             report.startVerified = startChanged || afterStartState.status === 'running';
-            await callRuntimeBridge(bridge, 'dispatchInput', { key: 'ArrowRight', code: 'ArrowRight', type: 'keydown', direction: 'right' });
+            const inputResult = await callRuntimeBridge(bridge, 'dispatchInput', { key: 'ArrowRight', code: 'ArrowRight', type: 'keydown', direction: 'right' });
+            rememberBridgeTimeout(inputResult);
             await waitForMs(650);
-            const afterInputState = normalizeInteractiveState(await callRuntimeBridge(bridge, 'getState'));
+            const afterInputStateRaw = await callRuntimeBridge(bridge, 'getState');
+            rememberBridgeTimeout(afterInputStateRaw);
+            const afterInputState = normalizeInteractiveState(afterInputStateRaw);
             const afterInputCanvas = canvasHashFromDocument(doc);
             const inputDiff = getInteractiveStateDiff(afterStartState, afterInputState);
             report.inputVerified = inputDiff.length > 0 || afterStartCanvas.hash !== afterInputCanvas.hash;
-            await callRuntimeBridge(bridge, 'restart');
+            const restartResult = await callRuntimeBridge(bridge, 'restart');
+            rememberBridgeTimeout(restartResult);
             await waitForMs(650);
-            const afterRestartState = normalizeInteractiveState(await callRuntimeBridge(bridge, 'getState'));
+            const afterRestartStateRaw = await callRuntimeBridge(bridge, 'getState');
+            rememberBridgeTimeout(afterRestartStateRaw);
+            const afterRestartState = normalizeInteractiveState(afterRestartStateRaw);
             const afterRestartCanvas = canvasHashFromDocument(doc);
             const restartDiff = getInteractiveStateDiff(afterInputState, afterRestartState);
             const restartChanged = restartDiff.length > 0 || afterInputCanvas.hash !== afterRestartCanvas.hash;
@@ -11289,11 +11331,19 @@ Lock Game Type to "Bullet Hell / Flying Shooter" and genre to "bullet-hell".`
         return await ensureAIDirectProjectDeliveryReady(editedProject, sourceSpec, plan && plan.productionPlan, plan && plan.productionBrief, activeModel, null);
     }
 
+    function applyGeneratedPreviewFrameSecurity(frame) {
+        if (!frame || !frame.setAttribute) return;
+        frame.setAttribute('sandbox', 'allow-scripts allow-same-origin');
+        frame.setAttribute('referrerpolicy', 'no-referrer');
+    }
+
     function reloadSrcdocPreviewFrame(frame) {
         if (!frame || !frame.srcdoc) return false;
+        applyGeneratedPreviewFrameSecurity(frame);
         const html = frame.srcdoc;
         frame.srcdoc = '';
         window.setTimeout(() => {
+            applyGeneratedPreviewFrameSecurity(frame);
             frame.srcdoc = html;
             try {
                 frame.contentWindow && frame.contentWindow.dispatchEvent(new Event('resize'));
@@ -11476,6 +11526,7 @@ canvas, svg, video, img {
         const previewUrl = project.previewUrl ? resolvePreviewUrl(project.previewUrl) : '';
         const frame = workspace.querySelector('.template-preview-frame');
         if (frame) {
+            applyGeneratedPreviewFrameSecurity(frame);
             const html = getAIDirectProjectHtml(project);
             if (html) {
                 frame.removeAttribute('loading');
@@ -11485,6 +11536,7 @@ canvas, svg, video, img {
                 window.setTimeout(() => applyPreviewFrameContentFit(frame), 120);
             } else if (previewUrl) {
                 frame.removeAttribute('srcdoc');
+                applyGeneratedPreviewFrameSecurity(frame);
                 frame.src = previewUrl;
                 frame.__pendingVisibleReload = false;
             }
@@ -14421,7 +14473,7 @@ console.log('Droi generated game:', GAME_TITLE);`
             ].join('')
             : '';
         const previewMarkup = previewUrl
-            ? `<iframe class="template-preview-frame" src="${escapeHtml(previewUrl)}" title="${escapeHtml(projectMeta.title)} playable AI direct preview" loading="lazy"></iframe>`
+            ? `<iframe class="template-preview-frame" src="${escapeHtml(previewUrl)}" title="${escapeHtml(projectMeta.title)} playable AI direct preview" loading="lazy" sandbox="allow-scripts allow-same-origin" referrerpolicy="no-referrer"></iframe>`
             : '<canvas class="game-preview-canvas" width="640" height="360" tabindex="0" aria-label="Playable generated game preview"></canvas>';
         return [
             `<div class="generated-game-page generated-workspace-pc is-beginner-mode" data-game-workspace data-workspace-mode="beginner" data-generated-view="preview" ${previewAttributes}>`,
@@ -17738,6 +17790,7 @@ console.log('Droi generated game:', GAME_TITLE);`
     function mountGeneratedGamePreview(container, plan) {
         const previewFrame = container.querySelector('.template-preview-frame');
         if (previewFrame) {
+            applyGeneratedPreviewFrameSecurity(previewFrame);
             const projectHtml = getAIDirectProjectHtml(plan && plan.generatedProject);
             if (projectHtml) {
                 const previewUrl = previewFrame.src || previewFrame.dataset.previewUrl || '';
