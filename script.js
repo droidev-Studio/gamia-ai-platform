@@ -6051,6 +6051,7 @@ Treat genre conventions as suggested, not confirmed, unless the user explicitly 
         const projectMeta = project.projectMeta || (project.generationReport && project.generationReport.projectMeta) || {};
         const projectMetaReady = projectMeta.ready === true || Boolean(projectMeta.title || projectMeta.projectName || projectMeta.englishDescription);
         const artUiApplied = hasFinishedArtUiEvidence(project);
+        const finishedPlayableReady = project.finishedPlayableReady ?? project.generationReport?.finishedPlayableReady;
 
         if (deliveryTier === 'core') {
             return {
@@ -6059,6 +6060,16 @@ Treat genre conventions as suggested, not confirmed, unless the user explicitly 
                 title: 'Playable core ready',
                 message: 'Playable core ready, art/UI generation still needs recovery.',
                 deliveryTier,
+                skippedStages
+            };
+        }
+        if (finishedPlayableReady === false) {
+            return {
+                ok: false,
+                reason: 'finished_gate_incomplete',
+                title: 'Playable core ready',
+                message: 'Playable core ready, art/UI generation still needs recovery.',
+                deliveryTier: deliveryTier || 'core',
                 skippedStages
             };
         }
