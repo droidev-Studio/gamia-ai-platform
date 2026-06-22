@@ -9582,6 +9582,38 @@ Lock Game Type to "Bullet Hell / Flying Shooter" and genre to "bullet-hell".`
         return Boolean(project.deliveryReady === true && report && report.ok === true);
     }
 
+    function upsertGenerationPipelineStage(stages = [], stagePatch = {}) {
+        const nextStages = Array.isArray(stages) ? stages.map(stage => ({ ...stage })) : [];
+        const id = String(stagePatch.id || '').trim();
+        if (!id) return nextStages;
+        const index = nextStages.findIndex(stage => String(stage.id || '') === id);
+        const current = index >= 0 ? nextStages[index] : {};
+        const next = {
+            ...current,
+            ...stagePatch
+        };
+        if (index >= 0) nextStages[index] = next;
+        else nextStages.push(next);
+        return nextStages;
+    }
+
+    function buildFinalSelfTestPipelineStage(interactiveReport = {}) {
+        const ok = interactiveReport && interactiveReport.ok === true;
+        const testedAt = interactiveReport && interactiveReport.testedAt || new Date().toISOString();
+        return {
+            id: 'final_self_test',
+            label: 'Testing controls and restart',
+            status: ok ? 'done' : 'failed',
+            startedAt: testedAt,
+            finishedAt: testedAt,
+            summary: ok
+                ? 'Interactive self-test passed in the browser workspace.'
+                : 'Interactive self-test failed in the browser workspace.',
+            evidence: interactiveReport || {},
+            errorCode: ok ? '' : 'INTERACTIVE_SELF_TEST_FAILED'
+        };
+    }
+
     function applyInteractiveReportToProject(project, report, repairAttempts = project && project.repairAttempts || 0) {
         if (!project || typeof project !== 'object') return project;
         const normalizedReport = {
@@ -9605,7 +9637,11 @@ Lock Game Type to "Bullet Hell / Flying Shooter" and genre to "bullet-hell".`
             interactiveReport: normalizedReport,
             deliveryReady: project.deliveryReady,
             qualityTier: project.qualityTier,
-            repairAttempts
+            repairAttempts,
+            pipelineStages: upsertGenerationPipelineStage(
+                project.generationReport && project.generationReport.pipelineStages,
+                buildFinalSelfTestPipelineStage(normalizedReport)
+            )
         };
         updateProjectGenerationReportFile(project, project.generationReport);
         return project;
@@ -9894,7 +9930,6 @@ Lock Game Type to "Bullet Hell / Flying Shooter" and genre to "bullet-hell".`
                 },
                 projectId: project.projectId || project.id || '',
                 previewUrl: project.previewUrl || '',
-                currentFiles: codeFiles,
                 relevantCodeFiles: codeFiles,
                 currentFileRefs: contextBundle.contextPack.includedRefs,
                 contextPack: contextBundle.contextPack,
@@ -10132,6 +10167,9 @@ Lock Game Type to "Bullet Hell / Flying Shooter" and genre to "bullet-hell".`
                     interactiveReport: project.interactiveReport
                 };
             },
+            applyInteractiveReportToProjectForTest(project = {}, report = {}, repairAttempts = 0) {
+                return applyInteractiveReportToProject(project, report, repairAttempts);
+            },
             getFinishedPlayableGateStatusForProject(project = {}) {
                 return getFinishedPlayableGateStatus(project);
             },
@@ -10218,6 +10256,9 @@ Lock Game Type to "Bullet Hell / Flying Shooter" and genre to "bullet-hell".`
                     restartVerified: false,
                     fatalErrors: ['start did not change state']
                 }, options.spec || getCurrentGameSpec(), options.attempt || 1);
+            },
+            buildBackendProjectRestoreSnapshotForTest(project = {}) {
+                return buildBackendProjectRestoreSnapshot(project);
             },
             applyRuntimeBridgeAdapterForTest(html = '') {
                 return injectRuntimeBridgeAdapterIntoHtml(String(html || ''));
@@ -11298,7 +11339,6 @@ Lock Game Type to "Bullet Hell / Flying Shooter" and genre to "bullet-hell".`
                 projectId: currentProject.projectId || currentProject.id || '',
                 sessionId: workspaceIdentity && workspaceIdentity.workspaceId ? workspaceIdentity.workspaceId : '',
                 previewUrl: currentProject.previewUrl || '',
-                currentFiles: codeFiles,
                 relevantCodeFiles: codeFiles,
                 currentFileRefs: contextBundle.contextPack.includedRefs,
                 contextPack: contextBundle.contextPack,
@@ -12370,6 +12410,12 @@ canvas, svg, video, img {
                 : `/generated/${projectId}/index.html`;
             const localPreviewUrl = createLocalAIDirectPreviewUrl(codeFiles);
             const report = parseGenerationReportFile(codeFiles, project.generationReport || null);
+            const restoredProjectMeta = {
+                ...(report && report.projectMeta && typeof report.projectMeta === 'object' ? report.projectMeta : {}),
+                ...(project.projectMeta && typeof project.projectMeta === 'object' ? project.projectMeta : {}),
+                ...(data.project && data.project.metadata && typeof data.project.metadata === 'object' ? data.project.metadata : {}),
+                ...(data.projectMeta && typeof data.projectMeta === 'object' ? data.projectMeta : {})
+            };
             const hydratedPlan = JSON.parse(JSON.stringify(plan));
             hydratedPlan.generatedProject = {
                 ...hydratedPlan.generatedProject,
@@ -12381,6 +12427,7 @@ canvas, svg, video, img {
                 previewUrl: localPreviewUrl || remotePreviewUrl,
                 remotePreviewUrl,
                 generationReport: report,
+                projectMeta: restoredProjectMeta,
                 validationReport: project.validationReport || report?.validationReport || null,
                 interactiveReport: project.interactiveReport || report?.interactiveReport || null,
                 cloudCheckpoint: true,
@@ -12393,8 +12440,12 @@ canvas, svg, video, img {
             recordDiagnostic('workspace-backend-restore', {
                 projectId,
                 revisionId: restoredRevisionId,
-                files: codeFiles.map(file => file.path)
+                files: codeFiles.map(file => file.path),
+                projectTitle: restoredProjectMeta.title || restoredProjectMeta.projectName || ''
             });
+            if (Object.keys(restoredProjectMeta).length) {
+                syncProjectMetaToGeneratedProject(hydratedPlan, restoredProjectMeta);
+            }
             return hydratedPlan;
         } catch (error) {
             recordDiagnostic('workspace-backend-restore-skipped', {
@@ -12418,6 +12469,93 @@ canvas, svg, video, img {
         if (!workspaceId) return null;
         const snapshot = await workspaceDbGet(WORKSPACE_STORE, workspaceId);
         return snapshot || null;
+    }
+
+    function buildBackendProjectRestoreSnapshot(project = {}) {
+        const projectId = project.projectId || project.id || '';
+        if (!projectId) return null;
+        const revisionId = project.currentRevisionId || project.revisionId || '';
+        const metadata = project.metadata && typeof project.metadata === 'object' ? project.metadata : {};
+        const title = metadata.title || metadata.projectName || project.title || 'Restored Game';
+        const description = metadata.description || metadata.englishDescription || 'Restored from your saved workspace.';
+        return stripSensitiveWorkspaceKeys({
+            schemaVersion: 1,
+            workspaceId: localWorkspaceId(projectId),
+            projectId,
+            currentRevisionId: revisionId,
+            createdAt: project.createdAt || new Date().toISOString(),
+            updatedAt: project.updatedAt || project.createdAt || new Date().toISOString(),
+            storageMode: 'backend-restore',
+            cloudCheckpoint: true,
+            backendProjectRef: {
+                projectId,
+                revisionId,
+                codeBundleRef: ''
+            },
+            uiState: {
+                generatedView: 'preview',
+                workspaceMode: 'beginner',
+                activeToolTab: 'stats',
+                selectedItemId: ''
+            },
+            draft: {},
+            projectInfo: {
+                draft: {},
+                dirty: false,
+                saveState: 'saved',
+                publishChecklist: []
+            },
+            numericDraft: {},
+            patches: {
+                memory: project.memory || {}
+            },
+            history: [],
+            generationPlan: {
+                generatedSpec: {
+                    meta: {
+                        gameName: title,
+                        description
+                    },
+                    userSpec: {}
+                },
+                generatedProject: {
+                    projectId,
+                    id: projectId,
+                    currentRevisionId: revisionId,
+                    revisionId,
+                    projectMeta: normalizeProjectMeta({ projectMeta: metadata, title, description }, {}, '')
+                }
+            },
+            exportState: {},
+            reason: 'backend_recent_project_restore'
+        });
+    }
+
+    async function loadBackendRecentWorkspaceSnapshot() {
+        try {
+            const response = await fetch(apiUrl('/api/projects'), {
+                method: 'GET',
+                credentials: 'include',
+                headers: { 'Accept': 'application/json' }
+            });
+            if (!response.ok) return null;
+            const data = await response.json();
+            const projects = Array.isArray(data.projects) ? data.projects : [];
+            const candidate = projects.find(project => project && project.projectId && project.currentRevisionId);
+            const snapshot = buildBackendProjectRestoreSnapshot(candidate || null);
+            if (snapshot) {
+                recordDiagnostic('workspace-backend-recent-project-found', {
+                    projectId: snapshot.projectId,
+                    revisionId: snapshot.currentRevisionId
+                });
+            }
+            return snapshot;
+        } catch (error) {
+            recordDiagnostic('workspace-backend-recent-project-skipped', {
+                message: error && (error.message || String(error))
+            });
+            return null;
+        }
     }
 
     function collectWorkspaceUiState(workspace) {
@@ -16413,7 +16551,49 @@ console.log('Droi generated game:', GAME_TITLE);`
             refreshWorkspaceCodePanel(workspace, plan);
             scheduleWorkspaceSnapshotSave(workspace, plan, 'project_info_saved');
             persistWorkspaceSnapshot(workspace, plan, 'project_info_saved');
+            persistProjectInfoMetadata(nextMeta, source);
             return true;
+        }
+
+        async function persistProjectInfoMetadata(projectMeta, source = 'Save project info') {
+            const project = plan && plan.generatedProject ? plan.generatedProject : {};
+            const projectId = project.projectId || project.id || resolveWorkspaceProjectId(plan);
+            if (!projectId) return;
+            const workspaceIdentity = ensureWorkspaceIdentity(workspace, plan);
+            try {
+                const response = await fetch(apiUrl(`/api/projects/${encodeURIComponent(projectId)}/metadata`), {
+                    method: 'POST',
+                    credentials: 'include',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify(stripSensitiveWorkspaceKeys({
+                        projectMeta,
+                        sessionId: workspaceIdentity && workspaceIdentity.workspaceId ? workspaceIdentity.workspaceId : ''
+                    }))
+                });
+                const data = await parseJsonResponse(response);
+                if (data && data.projectMeta) {
+                    syncProjectMetaToGeneratedProject(plan, data.projectMeta);
+                    state.projectInfoDraft = {};
+                    refreshProjectInfoFields();
+                    scheduleWorkspaceSnapshotSave(workspace, plan, 'project_info_backend_saved');
+                }
+                recordDiagnostic('workspace-project-info-saved', {
+                    projectId,
+                    source
+                });
+            } catch (error) {
+                updateWorkspaceSaveState('unsaved', 'Info saved locally');
+                addWorkspaceSystemNotice(
+                    workspace,
+                    'Info saved locally',
+                    'Project info is saved in this browser. Backend metadata sync will retry when the service is available.',
+                    source
+                );
+                recordDiagnostic('workspace-project-info-backend-save-failed', {
+                    projectId,
+                    message: error && (error.message || String(error))
+                });
+            }
         }
 
         function showPublishChecklist() {
@@ -19251,8 +19431,11 @@ HTML5 Constraints: Canvas, playable, responsive, no external dependencies, singl
         if (chatHistory && chatHistory.classList.contains('is-generating')) return false;
         const promptDraft = localStorage.getItem('droi_prompt_draft') || '';
         if (promptDraft.trim()) return false;
-        const snapshot = await loadActiveWorkspaceSnapshot();
-        if (!snapshot || !isRecentWorkspaceSnapshot(snapshot)) return false;
+        let snapshot = await loadActiveWorkspaceSnapshot();
+        if (!snapshot || !isRecentWorkspaceSnapshot(snapshot)) {
+            snapshot = await loadBackendRecentWorkspaceSnapshot();
+        }
+        if (!snapshot) return false;
         let plan = reviveWorkspaceGenerationPlan(snapshot);
         plan = await hydrateWorkspacePlanFromBackend(snapshot, plan);
         if (!plan || !plan.generatedProject || !Array.isArray(plan.generatedProject.codeFiles) || !plan.generatedProject.codeFiles.length) {
@@ -19267,8 +19450,10 @@ HTML5 Constraints: Canvas, playable, responsive, no external dependencies, singl
         recordDiagnostic('workspace-restored', {
             workspaceId: snapshot.workspaceId || '',
             projectId: snapshot.projectId || '',
-            updatedAt: snapshot.updatedAt || ''
+            updatedAt: snapshot.updatedAt || '',
+            source: snapshot.reason || snapshot.storageMode || 'local_snapshot'
         });
+        persistWorkspacePlanSnapshot(plan, 'backend_or_local_restore');
         return true;
     }
 
