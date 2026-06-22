@@ -6004,7 +6004,7 @@ Treat genre conventions as suggested, not confirmed, unless the user explicitly 
     }
 
     function getGenerationFailureWorkfeedStep(error = {}) {
-        if (error && error.workfeedStep) return String(error.workfeedStep);
+        if (error && (error.workfeedStep || error.data?.workfeedStep)) return String(error.workfeedStep || error.data?.workfeedStep);
         const code = String(error.code || error.data?.code || '').toUpperCase();
         const category = String(error.category || error.data?.category || '').toLowerCase();
         const message = `${error.message || ''} ${error.title || ''} ${error.technicalMessage || ''}`.toLowerCase();
@@ -9101,29 +9101,6 @@ Lock Game Type to "Bullet Hell / Flying Shooter" and genre to "bullet-hell".`
         return [];
     }
 
-    function extractHtmlFromModelProjectPayload(payload, phase = 'AI direct fallback generation') {
-        const files = normalizeModelGeneratedFiles(payload.files || payload.codeFiles || payload.projectFiles);
-        const htmlFile = files.find(file => String(file.path || '').toLowerCase().endsWith('.html'));
-        if (htmlFile && htmlFile.content) {
-            return { html: htmlFile.content, files };
-        }
-        const inlineHtml = payload.indexHtml || payload.html || payload.content || payload.source;
-        if (typeof inlineHtml === 'string' && /<canvas\b/i.test(inlineHtml)) {
-            return {
-                html: inlineHtml,
-                files: [{ path: 'index.html', content: inlineHtml }]
-            };
-        }
-        throw createAIFlowError(
-            'AI_DIRECT_HTML_MISSING',
-            'schema_failure',
-            'AI direct HTML is missing',
-            `${phase} did not return a runnable HTML entry. This is a result validation issue, not a game type limitation.`,
-            'index.html missing',
-            ['retry', 'switch_model', 'manual_queue']
-        );
-    }
-
     const GAMIA_RUNTIME_BRIDGE_VERSION = 'gamia-game-runtime-v1';
     const GAMIA_RUNTIME_BRIDGE_PROMPT = [
         'Runtime bridge contract is mandatory for delivery:',
@@ -9168,122 +9145,6 @@ Lock Game Type to "Bullet Hell / Flying Shooter" and genre to "bullet-hell".`
                 ? `Generated HTML failed required checks: ${failedCritical.map(check => check.label).join(', ')}`
                 : 'Generated HTML passed local runnable checks.'
         };
-    }
-
-    function buildAIDirectFallbackPrompt(spec, productionPlan, productionBrief, originalPrompt) {
-        const briefText = productionBrief || buildProductionBriefText(normalizeGamePlanForGeneration(productionPlan || {}, spec), spec);
-        return [
-            'Generate a complete playable browser game as a single-file HTML5 Canvas project.',
-            'Return strict JSON only. Do not wrap it in Markdown.',
-            'Required JSON shape: {"files":[{"path":"index.html","content":"<!DOCTYPE html>..."}],"report":{"summary":"","requirements":[],"controls":[],"notes":[]}}.',
-            '',
-            'Hard constraints:',
-            '- Use HTML5 Canvas as the main renderer.',
-            '- Single index.html is preferred.',
-            '- No external dependencies, CDN, remote assets, remote fonts, modules, or network calls.',
-            '- The game must be playable immediately in an iframe.',
-            '- Keep the implementation compact: one polished P0 loop, roughly 300-700 lines of HTML/CSS/JS.',
-            '- Make it responsive to desktop and mobile viewport sizes.',
-            '- Include start, pause, restart, win, and fail states when relevant.',
-            '- Include HUD feedback such as score, lives/health, timer, combo, coins, or progress based on the brief.',
-            '- First screen must include readable How to play guidance: goal/objective, controls, and the next action.',
-            '- For mouse, touch, or button-driven games, label the primary action and the order of operations.',
-            '- Avoid placeholder-only screens, explanation-only output, or black/empty canvas.',
-            '- Expose the mandatory runtime bridge exactly as window.__GAMIA_GAME__.',
-            '',
-            GAMIA_RUNTIME_BRIDGE_PROMPT,
-            '',
-            `Original prompt:\n${originalPrompt || ''}`,
-            '',
-            `GameSpec:\n${JSON.stringify(spec || {}, null, 2)}`,
-            '',
-            `Production brief:\n${briefText}`,
-            '',
-            'Validation expectation: index.html must contain a <canvas>, inline <script>, and complete game logic.'
-        ].join('\n');
-    }
-
-    async function generateAIDirectGameProjectViaModelFallback(spec, productionPlan, productionBrief, activeModel, reason = '') {
-        const prompt = savedPrompt || spec.background || '';
-        const fallbackEventId = addExecutionEvent(
-            'Backend stage unavailable - using model direct HTML fallback',
-            'warning',
-            reason || 'The backend does not recognize generate-game-project yet.'
-        );
-        const response = await aiService.stageChat('/api/chat', [
-            {
-                role: 'system',
-                content: `You are an expert HTML5 Canvas game engineer. Return strict JSON only. Generate complete playable single-file games with no external dependencies. ${getLanguageInstruction()}`
-            },
-            {
-                role: 'user',
-                content: buildAIDirectFallbackPrompt(spec, productionPlan, productionBrief, prompt)
-            }
-        ], {
-            provider: activeModel.providerId,
-            model: activeModel.modelId,
-            maxTokens: 16000,
-            phase: 'AI direct fallback generation'
-        });
-        const parsed = extractModelJsonObject(response.content, 'AI direct fallback generation');
-        const { html, files } = extractHtmlFromModelProjectPayload(parsed, 'AI direct fallback generation');
-        const validationReport = validateAIDirectHtml(html);
-        updateExecutionEvent(fallbackEventId, {
-            status: validationReport.ok ? 'done' : 'failed',
-            title: validationReport.ok ? 'Created index.html through model fallback' : 'Fallback HTML validation failed',
-            detail: validationReport.message
-        });
-        if (!validationReport.ok) {
-            throw createAIFlowError(
-                'AI_DIRECT_VALIDATION_FAILED',
-                'schema_failure',
-                'AI direct validation failed',
-                'The AI returned HTML, but local validation did not approve it as a playable browser game. This is a result validation issue, not a game type limitation.',
-                validationReport.message,
-                ['retry', 'switch_model', 'manual_queue']
-            );
-        }
-        const projectId = `ai-game-${Date.now()}`;
-        const blob = new Blob([html], { type: 'text/html' });
-        const previewUrl = URL.createObjectURL(blob);
-        const report = parsed.report || {
-            summary: 'Generated by frontend compatibility fallback because the backend AI direct stage was unavailable.',
-            requirements: [
-                'HTML5 Canvas',
-                'Playable',
-                'Responsive',
-                'No external dependencies',
-                'Single-file-first'
-            ],
-            fallbackReason: reason || 'Unknown AI generation stage: generate-game-project.'
-        };
-        const codeFiles = normalizeModelGeneratedFiles(files).some(file => String(file.path || '').toLowerCase() === 'index.html')
-            ? normalizeModelGeneratedFiles(files)
-            : [{ path: 'index.html', content: html }];
-        const fallbackProject = normalizeGeneratedProject({
-            projectId,
-            previewUrl,
-            codeFiles: [
-                ...codeFiles,
-                {
-                    path: 'generation-report.json',
-                    content: JSON.stringify(report, null, 2),
-                    language: 'json',
-                    kind: 'report'
-                }
-            ],
-            generationReport: report,
-            validationReport,
-            modelMeta: {
-                providerId: activeModel.providerId,
-                modelId: activeModel.modelId,
-                label: activeModel.label || getModelLabel(activeModel.providerId, activeModel.modelId),
-                fallback: 'model_direct_html'
-            },
-            generationMode: 'ai_direct',
-            fallbackReason: reason || 'backend_stage_unavailable'
-        }, latestGenerationPlan, spec, activeModel);
-        return await ensureAIDirectProjectDeliveryReady(fallbackProject, spec, productionPlan, productionBrief, activeModel, null);
     }
 
     function decodeEscapedGeneratedContent(content) {
@@ -10194,6 +10055,44 @@ Lock Game Type to "Bullet Hell / Flying Shooter" and genre to "bullet-hell".`
             getGenerationFailureWorkfeedStepForTest(error = {}) {
                 return getGenerationFailureWorkfeedStep(error);
             },
+            applyAIDirectStreamEventsForTest(events = []) {
+                const api = getWorkfeedApi();
+                const job = api && api.workfeed && api.workfeed.createWorkfeedJob({
+                    id: 'test-stream-workfeed',
+                    type: 'generation',
+                    title: 'Test stream workfeed',
+                    steps: buildFinishedGameGenerationWorkfeedSteps()
+                });
+                const handle = { job, card: null };
+                events.forEach(event => applyAIDirectStreamEventToWorkfeed(event, { workfeedHandle: handle }));
+                return {
+                    status: job && job.status,
+                    steps: job && Array.isArray(job.steps) ? job.steps.map(step => ({
+                        id: step.id,
+                        status: step.status,
+                        summary: step.summary
+                    })) : []
+                };
+            },
+            failGenerationWorkfeedForTest(error = {}) {
+                const api = getWorkfeedApi();
+                const job = api && api.workfeed && api.workfeed.createWorkfeedJob({
+                    id: 'test-generation-workfeed',
+                    type: 'generation',
+                    title: 'Test generation workfeed',
+                    steps: buildFinishedGameGenerationWorkfeedSteps()
+                });
+                const handle = { job, card: null };
+                failGenerationWorkfeed(handle, error, error.message || 'Test failure');
+                return {
+                    status: job && job.status,
+                    steps: job && Array.isArray(job.steps) ? job.steps.map(step => ({
+                        id: step.id,
+                        status: step.status,
+                        summary: step.summary
+                    })) : []
+                };
+            },
             buildGenerationCompletionReceiptForTest(plan = {}, durationMs = 0) {
                 return buildGenerationCompletionReceipt(plan, durationMs);
             },
@@ -10499,6 +10398,7 @@ Lock Game Type to "Bullet Hell / Flying Shooter" and genre to "bullet-hell".`
         error.title = errorData && errorData.title || phase;
         error.message = errorData && errorData.message || error.message;
         error.technicalMessage = errorData && errorData.technicalMessage || '';
+        error.workfeedStep = errorData && errorData.workfeedStep || '';
         error.data = errorData || {};
         error.validationReport = payload && payload.validationReport;
         throw error;
@@ -10522,12 +10422,13 @@ Lock Game Type to "Bullet Hell / Flying Shooter" and genre to "bullet-hell".`
         const stageId = normalizePipelineStageId(stage && stage.id ? stage.id : '');
         if (!stageId) return;
         const type = String(event.type || '');
+        const stageStatus = String(stage.status || '').toLowerCase();
         const status = type === 'stage_started'
             ? 'running'
             : type === 'stage_skipped'
                 ? 'skipped'
             : type === 'stage_failed'
-                ? (isSoftPipelineStage(stageId) ? 'skipped' : 'failed')
+                ? (stageStatus === 'warning' ? 'warning' : (isSoftPipelineStage(stageId) ? 'skipped' : 'failed'))
                 : type === 'stage_warning'
                     ? 'warning'
                     : 'done';
