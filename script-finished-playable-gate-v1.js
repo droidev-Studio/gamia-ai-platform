@@ -6090,16 +6090,76 @@ Treat genre conventions as suggested, not confirmed, unless the user explicitly 
         return files.some(file => pattern.test(String(file.path || file.name || '')));
     }
 
-    function hasFinishedArtUiEvidence(project = {}) {
-        const report = project.generationReport || {};
+    function parseJsonObjectMaybe(value) {
+        if (!value) return null;
+        if (typeof value === 'object') return value;
+        if (typeof value !== 'string') return null;
+        try {
+            const parsed = JSON.parse(value);
+            return parsed && typeof parsed === 'object' ? parsed : null;
+        } catch (_) {
+            return null;
+        }
+    }
+
+    function getProjectGenerationReportObject(project = {}) {
+        const direct = parseJsonObjectMaybe(project.generationReport || project.generationReportJson || project.report || project['generation-report.json']);
+        if (direct) return direct;
+        const files = Array.isArray(project.codeFiles) ? project.codeFiles : [];
+        const reportFile = files.find(file => String(file.path || file.name || '').replace(/\\/g, '/').toLowerCase() === 'generation-report.json');
+        return parseJsonObjectMaybe(reportFile && reportFile.content) || {};
+    }
+
+    function hasMeaningfulReportField(value) {
+        if (value == null) return false;
+        if (typeof value === 'boolean') return value === true;
+        if (typeof value === 'string') return value.trim().length > 0;
+        if (Array.isArray(value)) return value.length > 0;
+        if (typeof value === 'object') return Object.keys(value).length > 0;
+        return true;
+    }
+
+    function getFinishedArtUiEvidenceStatus(project = {}) {
+        const report = getProjectGenerationReportObject(project);
         const explicit = project.artUiApplied ?? report.artUiApplied;
-        if (explicit === true) return true;
-        if (explicit === false) return false;
-        const assetManifest = project.assetManifest || report.assetManifest;
-        const artDecision = project.artResourceDecision || report.artResourceDecision;
-        const uiDecision = project.uiSkinDecision || report.uiSkinDecision;
-        const visualReport = project.visualStyleReport || report.visualStyleReport;
-        return Boolean(assetManifest || artDecision || uiDecision || visualReport);
+        if (explicit === false) {
+            return {
+                ok: false,
+                missing: ['artUiApplied'],
+                report
+            };
+        }
+        const evidence = {
+            artResourceDecision: project.artResourceDecision || report.artResourceDecision,
+            uiSkinDecision: project.uiSkinDecision || report.uiSkinDecision,
+            assetManifest: project.assetManifest || report.assetManifest,
+            visualStyleReport: project.visualStyleReport || report.visualStyleReport
+        };
+        const missing = Object.entries(evidence)
+            .filter(([, value]) => !hasMeaningfulReportField(value))
+            .map(([key]) => key);
+        return {
+            ok: explicit === true && missing.length === 0,
+            missing: explicit === true ? missing : ['artUiApplied', ...missing],
+            report,
+            evidence
+        };
+    }
+
+    function getFinishedInteractiveReportStatus(project = {}) {
+        const report = getProjectGenerationReportObject(project);
+        const topLevelInteractive = getProjectInteractiveReport(project);
+        const reportInteractive = report && report.interactiveReport;
+        const interactiveReport = reportInteractive || topLevelInteractive;
+        const missing = [];
+        if (!interactiveReport) missing.push('interactiveReport');
+        if (!reportInteractive) missing.push('generationReport.interactiveReport');
+        return {
+            ok: Boolean(interactiveReport && interactiveReport.ok === true && reportInteractive && reportInteractive.ok === true),
+            missing,
+            interactiveReport,
+            report
+        };
     }
 
     function getFinishedPlayableGateStatus(project = {}) {
@@ -6107,16 +6167,16 @@ Treat genre conventions as suggested, not confirmed, unless the user explicitly 
         const skippedStages = getProjectSkippedStages(project);
         const skippedIds = skippedStages.map(stage => String(stage.id || stage.label || '').toLowerCase());
         const artUiSkipped = skippedIds.some(id => id === 'art_ui_apply' || id === 'visual_enhance');
-        const interactiveReport = getProjectInteractiveReport(project);
-        const interactiveOk = !interactiveReport || interactiveReport.ok === true;
+        const interactiveStatus = getFinishedInteractiveReportStatus(project);
         const hasPreview = Boolean(project.previewUrl || getAIDirectProjectHtml(project));
         const hasIndex = hasProjectCodeFile(project, /(?:^|\/)index\.html$/i) || Boolean(getAIDirectProjectHtml(project));
         const hasReport = hasProjectCodeFile(project, /(?:^|\/)generation-report\.json$/i) || Boolean(project.generationReport);
         const hasProjectMetaFile = hasProjectCodeFile(project, /(?:^|\/)project-meta\.json$/i);
-        const projectMeta = project.projectMeta || (project.generationReport && project.generationReport.projectMeta) || {};
+        const report = getProjectGenerationReportObject(project);
+        const projectMeta = project.projectMeta || report.projectMeta || {};
         const projectMetaReady = projectMeta.ready === true && hasProjectMetaFile;
-        const artUiApplied = hasFinishedArtUiEvidence(project);
-        const finishedPlayableReady = project.finishedPlayableReady ?? project.generationReport?.finishedPlayableReady;
+        const artUiStatus = getFinishedArtUiEvidenceStatus(project);
+        const finishedPlayableReady = project.finishedPlayableReady ?? report.finishedPlayableReady;
 
         if (deliveryTier === 'core') {
             return {
@@ -6138,24 +6198,30 @@ Treat genre conventions as suggested, not confirmed, unless the user explicitly 
                 skippedStages
             };
         }
-        if (artUiSkipped || artUiApplied === false) {
+        if (artUiSkipped || !artUiStatus.ok) {
             return {
                 ok: false,
                 reason: 'art_ui_incomplete',
                 title: 'Playable core ready',
-                message: 'Playable core ready, art/UI generation still needs recovery.',
+                message: artUiStatus.missing && artUiStatus.missing.length
+                    ? `Playable core ready, art/UI generation still needs recovery. Missing report fields: ${artUiStatus.missing.join(', ')}.`
+                    : 'Playable core ready, art/UI generation still needs recovery.',
                 deliveryTier: deliveryTier || 'core',
-                skippedStages
+                skippedStages,
+                missingReportFields: artUiStatus.missing || []
             };
         }
-        if (!interactiveOk) {
+        if (!interactiveStatus.ok) {
             return {
                 ok: false,
                 reason: 'self_test_incomplete',
                 title: 'Playable self-test needs recovery',
-                message: 'The game rendered, but controls and restart could not be verified yet.',
+                message: interactiveStatus.missing && interactiveStatus.missing.length
+                    ? `The game rendered, but controls and restart could not be verified yet. Missing report fields: ${interactiveStatus.missing.join(', ')}.`
+                    : 'The game rendered, but controls and restart could not be verified yet.',
                 deliveryTier,
-                skippedStages
+                skippedStages,
+                missingReportFields: interactiveStatus.missing || []
             };
         }
         if (!hasPreview || !hasIndex || !hasReport) {
