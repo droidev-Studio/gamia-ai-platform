@@ -5882,12 +5882,29 @@ Treat genre conventions as suggested, not confirmed, unless the user explicitly 
         return refreshChatWorkfeed(handle);
     }
 
+    function normalizePipelineStageId(stageId = '') {
+        const id = String(stageId || '');
+        const aliases = {
+            visual_enhance: 'art_ui_apply',
+            gameplay_depth: 'gameplay_fit',
+            final_validation: 'final_self_test'
+        };
+        return aliases[id] || id;
+    }
+
+    function isArtUiPipelineStage(stageId = '') {
+        return normalizePipelineStageId(stageId) === 'art_ui_apply';
+    }
+
+    function isSoftPipelineStage(stageId = '') {
+        return new Set(['gameplay_fit', 'ui_polish']).has(normalizePipelineStageId(stageId));
+    }
+
     function syncGenerationPipelineWorkfeed(handle, project = {}) {
         if (!handle || !project) return handle;
         const stages = project.generationReport && Array.isArray(project.generationReport.pipelineStages)
             ? project.generationReport.pipelineStages
             : [];
-        const optionalStageIds = new Set(['visual_enhance', 'gameplay_depth', 'ui_polish', 'project_meta']);
         const statusMap = {
             done: 'done',
             completed: 'done',
@@ -5900,14 +5917,14 @@ Treat genre conventions as suggested, not confirmed, unless the user explicitly 
             queued: 'queued'
         };
         stages.forEach(stage => {
-            const id = String(stage.id || '');
+            const id = normalizePipelineStageId(stage.id || '');
             if (!id) return;
             let status = statusMap[String(stage.status || '').toLowerCase()] || 'done';
-            if (optionalStageIds.has(id) && status === 'failed') status = 'skipped';
+            if (isSoftPipelineStage(id) && status === 'failed') status = 'skipped';
             updateChatWorkfeedStep(handle, id, {
                 status,
                 summary: stage.summary || (status === 'skipped'
-                    ? 'Finished art/UI step needs recovery before final delivery.'
+                    ? (isArtUiPipelineStage(id) ? 'Art/UI resources need recovery before final delivery.' : 'Advanced polish step skipped. Using latest verified playable version.')
                     : status === 'done' ? 'Completed.' : '')
             });
         });
@@ -5920,7 +5937,7 @@ Treat genre conventions as suggested, not confirmed, unless the user explicitly 
             ...(handle.job.meta || {}),
             activeAttemptId: event.attemptId || ''
         };
-        ['core_playable', 'visual_enhance', 'gameplay_depth', 'ui_polish', 'project_meta', 'final_validation', 'render_check', 'start_test', 'input_test', 'restart_test', 'repair_interaction', 'self_test', 'preview'].forEach(stepId => {
+        ['core_playable', 'art_ui_apply', 'gameplay_fit', 'ui_polish', 'project_meta', 'final_self_test', 'render_check', 'start_test', 'input_test', 'restart_test', 'repair_interaction', 'self_test', 'preview'].forEach(stepId => {
             updateChatWorkfeedStep(handle, stepId, {
                 status: 'queued',
                 summary: ''
@@ -5949,7 +5966,7 @@ Treat genre conventions as suggested, not confirmed, unless the user explicitly 
         if (code.includes('INTERACTIVE') || /self[-\s]?test|start button|restart|input/.test(message)) return 'self_test';
         if (code.includes('REPAIR') || /repair/.test(message)) return 'repair_interaction';
         if (code.includes('RENDER') || category === 'validation_failure' && /render|canvas|preview/.test(message)) return 'render_check';
-        if (code.includes('VALIDATION') || /validation/.test(message)) return 'final_validation';
+        if (code.includes('VALIDATION') || /validation/.test(message)) return 'final_self_test';
         if (code.includes('STREAM')) return 'preview';
         return 'core_playable';
     }
@@ -9787,6 +9804,9 @@ Lock Game Type to "Bullet Hell / Flying Shooter" and genre to "bullet-hell".`
             getFinishedPlayableGateStatusForProject(project = {}) {
                 return getFinishedPlayableGateStatus(project);
             },
+            normalizePipelineStageIdForTest(stageId = '') {
+                return normalizePipelineStageId(stageId);
+            },
             setWorkspaceInteractiveReport(report = {}) {
                 const workspace = document.querySelector('[data-game-workspace]');
                 if (!workspace || !workspace.__plan || !workspace.__plan.generatedProject) {
@@ -10035,16 +10055,15 @@ Lock Game Type to "Bullet Hell / Flying Shooter" and genre to "bullet-hell".`
             syncGenerationPipelineWorkfeed(handle, { generationReport: { pipelineStages: event.pipelineStages } });
         }
         const stage = event.stage && typeof event.stage === 'object' ? event.stage : null;
-        const stageId = stage && stage.id ? stage.id : '';
+        const stageId = normalizePipelineStageId(stage && stage.id ? stage.id : '');
         if (!stageId) return;
         const type = String(event.type || '');
-        const optionalStageIds = new Set(['visual_enhance', 'gameplay_depth', 'ui_polish', 'project_meta']);
         const status = type === 'stage_started'
             ? 'running'
             : type === 'stage_skipped'
                 ? 'skipped'
             : type === 'stage_failed'
-                ? (optionalStageIds.has(stageId) ? 'skipped' : 'failed')
+                ? (isSoftPipelineStage(stageId) ? 'skipped' : 'failed')
                 : type === 'stage_warning'
                     ? 'warning'
                     : 'done';
@@ -10053,7 +10072,7 @@ Lock Game Type to "Bullet Hell / Flying Shooter" and genre to "bullet-hell".`
             summary: stage.summary || (status === 'running'
                 ? 'Working...'
                 : status === 'skipped'
-                    ? 'Finished art/UI step needs recovery before final delivery.'
+                    ? (isArtUiPipelineStage(stageId) ? 'Art/UI resources need recovery before final delivery.' : 'Advanced polish step skipped. Using latest verified playable version.')
                     : 'Completed.')
         });
     }
@@ -10606,7 +10625,7 @@ Lock Game Type to "Bullet Hell / Flying Shooter" and genre to "bullet-hell".`
             assertGenerationNotCancelled(cancelToken);
             addExecutionEvent('Testing playable game', project.interactiveReport && project.interactiveReport.ok === true ? 'done' : 'warning', project.interactiveReport ? JSON.stringify(project.interactiveReport, null, 2).slice(0, 1200) : 'Playable self-test report missing.');
             if (progress && progress.workfeedHandle) {
-                updateChatWorkfeedStep(progress.workfeedHandle, 'final_validation', {
+                updateChatWorkfeedStep(progress.workfeedHandle, 'final_self_test', {
                     status: project.interactiveReport && project.interactiveReport.ok === true ? 'done' : 'warning',
                     summary: project.interactiveReport && project.interactiveReport.ok === true
                         ? 'Playable game passed interaction self-test.'
@@ -18844,11 +18863,11 @@ HTML5 Constraints: Canvas, playable, responsive, no external dependencies, singl
                 steps: [
                     { id: 'request', label: 'Understanding your game idea', status: 'running', summary: 'Using your confirmed task and selections.' },
                     { id: 'core_playable', label: 'Designing playable core', status: 'queued', area: 'AI Direct pipeline' },
-                    { id: 'visual_enhance', label: 'Applying art and UI resources', status: 'queued', area: 'AI Direct pipeline' },
-                    { id: 'gameplay_depth', label: 'Fitting gameplay to your request', status: 'queued', area: 'AI Direct pipeline' },
+                    { id: 'art_ui_apply', label: 'Applying art and UI resources', status: 'queued', area: 'AI Direct pipeline' },
+                    { id: 'gameplay_fit', label: 'Fitting gameplay to your request', status: 'queued', area: 'AI Direct pipeline' },
                     { id: 'ui_polish', label: 'Preparing finished UI', status: 'queued', area: 'AI Direct pipeline' },
                     { id: 'project_meta', label: 'Preparing project title and preview', status: 'queued', area: 'AI Direct pipeline' },
-                    { id: 'final_validation', label: 'Final playable game check', status: 'queued', area: 'Backend validation' },
+                    { id: 'final_self_test', label: 'Final playable game check', status: 'queued', area: 'Backend validation' },
                     { id: 'render_check', label: 'Checking rendered preview', status: 'queued', area: 'Playable self-test' },
                     { id: 'start_test', label: 'Testing Start button', status: 'queued', area: 'Playable self-test' },
                     { id: 'input_test', label: 'Testing player input', status: 'queued', area: 'Playable self-test' },
@@ -18884,7 +18903,7 @@ HTML5 Constraints: Canvas, playable, responsive, no external dependencies, singl
                 chatHistory.classList.remove('is-generating');
                 const inputArea = document.querySelector('.chat-input-wrapper');
                 if (inputArea) inputArea.style.display = '';
-                updateChatWorkfeedStep(generationWorkfeed, finishedGate.reason === 'art_ui_incomplete' ? 'visual_enhance' : 'final_validation', {
+                updateChatWorkfeedStep(generationWorkfeed, finishedGate.reason === 'art_ui_incomplete' ? 'art_ui_apply' : 'final_self_test', {
                     status: 'warning',
                     summary: finishedGate.message
                 });
