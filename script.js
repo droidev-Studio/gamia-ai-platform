@@ -5887,6 +5887,7 @@ Treat genre conventions as suggested, not confirmed, unless the user explicitly 
         const stages = project.generationReport && Array.isArray(project.generationReport.pipelineStages)
             ? project.generationReport.pipelineStages
             : [];
+        const optionalStageIds = new Set(['visual_enhance', 'gameplay_depth', 'ui_polish', 'project_meta']);
         const statusMap = {
             done: 'done',
             completed: 'done',
@@ -5901,10 +5902,13 @@ Treat genre conventions as suggested, not confirmed, unless the user explicitly 
         stages.forEach(stage => {
             const id = String(stage.id || '');
             if (!id) return;
-            const status = statusMap[String(stage.status || '').toLowerCase()] || 'done';
+            let status = statusMap[String(stage.status || '').toLowerCase()] || 'done';
+            if (optionalStageIds.has(id) && status === 'failed') status = 'skipped';
             updateChatWorkfeedStep(handle, id, {
                 status,
-                summary: stage.summary || (status === 'done' ? 'Completed.' : '')
+                summary: stage.summary || (status === 'skipped'
+                    ? 'Optional polish step skipped. Using verified playable core.'
+                    : status === 'done' ? 'Completed.' : '')
             });
         });
         return handle;
@@ -9081,16 +9085,23 @@ Lock Game Type to "Bullet Hell / Flying Shooter" and genre to "bullet-hell".`
         const stageId = stage && stage.id ? stage.id : '';
         if (!stageId) return;
         const type = String(event.type || '');
+        const optionalStageIds = new Set(['visual_enhance', 'gameplay_depth', 'ui_polish', 'project_meta']);
         const status = type === 'stage_started'
             ? 'running'
+            : type === 'stage_skipped'
+                ? 'skipped'
             : type === 'stage_failed'
-                ? 'failed'
+                ? (optionalStageIds.has(stageId) ? 'skipped' : 'failed')
                 : type === 'stage_warning'
                     ? 'warning'
                     : 'done';
         updateChatWorkfeedStep(handle, stageId, {
             status,
-            summary: stage.summary || (status === 'running' ? 'Working...' : 'Completed.')
+            summary: stage.summary || (status === 'running'
+                ? 'Working...'
+                : status === 'skipped'
+                    ? 'Optional polish step skipped. Using verified playable core.'
+                    : 'Completed.')
         });
     }
 
@@ -12291,6 +12302,26 @@ console.log('Droi generated game:', GAME_TITLE);`
             : previewLayout;
         const previewAttributes = `data-preview-layout="${escapeHtml(previewLayout)}" data-preview-aspect="${escapeHtml(previewAspect.label)}" data-preview-orientation="${escapeHtml(previewOrientation)}" style="${escapeHtml(previewStyle)}"`;
         const sourceEvidence = workspaceProjectModeLabel(project || {});
+        const generationReport = project && project.generationReport && typeof project.generationReport === 'object' ? project.generationReport : {};
+        const skippedStages = Array.isArray(project && project.skippedStages)
+            ? project.skippedStages
+            : Array.isArray(generationReport.skippedStages) ? generationReport.skippedStages : [];
+        const deliveryTier = project && project.deliveryTier || generationReport.deliveryTier || '';
+        const workspaceNotice = project && project.workspaceNotice
+            || generationReport.workspaceNotice
+            || (project && project.partialEnhancement || generationReport.partialEnhancement
+                ? 'Playable version ready. Some polish steps did not finish.'
+                : '');
+        const workspaceNoticeHtml = workspaceNotice
+            ? [
+                '<div class="workspace-partial-notice" data-workspace-partial-notice>',
+                '<strong>Playable version ready</strong>',
+                `<span>${escapeHtml(workspaceNotice)}</span>`,
+                deliveryTier ? `<small>Delivery tier: ${escapeHtml(deliveryTier)}</small>` : '',
+                skippedStages.length ? `<small>Skipped polish: ${skippedStages.map(stage => escapeHtml(stage.id || stage.label || 'optional stage')).join(', ')}</small>` : '',
+                '</div>'
+            ].join('')
+            : '';
         const previewMarkup = previewUrl
             ? `<iframe class="template-preview-frame" src="${escapeHtml(previewUrl)}" title="${escapeHtml(projectMeta.title)} playable AI direct preview" loading="lazy"></iframe>`
             : '<canvas class="game-preview-canvas" width="640" height="360" tabindex="0" aria-label="Playable generated game preview"></canvas>';
@@ -12324,6 +12355,7 @@ console.log('Droi generated game:', GAME_TITLE);`
             '<button type="button" class="workspace-header-btn workspace-save-changes-btn" data-workspace-save-state disabled>Save Info</button>',
             '</div>',
             '</header>',
+            workspaceNoticeHtml,
             '<div class="workspace-body generated-page-layout page-workbench" aria-label="Generated game page workbench">',
             '<aside class="change-history-sidebar version-history-panel page-region" aria-label="Version history">',
             '<button type="button" class="workspace-panel-toggle workspace-panel-toggle-left" data-workspace-panel-toggle="history" aria-label="Toggle change history" aria-expanded="false">&lsaquo;</button>',
@@ -12437,11 +12469,23 @@ console.log('Droi generated game:', GAME_TITLE);`
         const checks = project && project.validationReport && Array.isArray(project.validationReport.checks)
             ? project.validationReport.checks
             : [];
+        const report = project && project.generationReport && typeof project.generationReport === 'object' ? project.generationReport : {};
+        const deliveryTier = project && project.deliveryTier || report.deliveryTier || '';
+        const skippedStages = Array.isArray(project && project.skippedStages)
+            ? project.skippedStages
+            : Array.isArray(report.skippedStages) ? report.skippedStages : [];
+        const partialEnhancement = Boolean(project && project.partialEnhancement || report.partialEnhancement);
         return [
             '<div class="selection-summary ai-pipeline-summary">',
             '<div class="summary-title">AI pipeline</div>',
             stages.length
                 ? `<div class="summary-item"><strong>Models:</strong> ${stages.map(stage => `${escapeHtml(stage.label)} ${escapeHtml(modelMetaDisplay(stage.meta))}`).join(' / ')}</div>`
+                : '',
+            deliveryTier
+                ? `<div class="summary-item"><strong>Delivery tier:</strong> ${escapeHtml(deliveryTier)}${partialEnhancement ? ' / partial polish' : ''}</div>`
+                : '',
+            skippedStages.length
+                ? `<div class="summary-item"><strong>Skipped stages:</strong> ${skippedStages.map(stage => escapeHtml(stage.id || stage.label || 'optional stage')).join(', ')}</div>`
                 : '',
             project && project.validationReport
                 ? `<div class="summary-item"><strong>Validation report:</strong> ${escapeHtml(project.validationReport.ok ? 'Passed' : 'Needs review')}</div>`

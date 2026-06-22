@@ -281,9 +281,18 @@
 }
 
 .workfeed-step[data-status="failed"] .workfeed-dot,
-.workfeed-step[data-status="warning"] .workfeed-dot {
+.workfeed-step[data-status="warning"] .workfeed-dot,
+.workfeed-step[data-status="skipped"] .workfeed-dot {
     background: rgba(var(--rgb-warn), .15);
     color: rgb(var(--rgb-warn));
+}
+
+.workfeed-step[data-status="skipped"] .workfeed-step-line strong {
+    color: rgba(var(--rgb-text-stronger), .82);
+}
+
+.workfeed-step[data-status="skipped"] .workfeed-step-main small {
+    color: rgba(var(--rgb-warn), .86);
 }
 
 @keyframes workfeedPulseBreathe {

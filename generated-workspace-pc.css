@@ -66,7 +66,7 @@
     body.game-edit-workspace-active .generated-game-page.generated-workspace-pc {
         position: relative !important;
         display: grid !important;
-        grid-template-rows: var(--pc-topbar-height) minmax(0, 1fr) !important;
+        grid-template-rows: var(--pc-topbar-height) auto minmax(0, 1fr) !important;
         width: 100vw !important;
         height: 100dvh !important;
         min-height: 100dvh !important;
@@ -76,6 +76,36 @@
             radial-gradient(circle at 60% 0%, rgba(94, 231, 255, 0.08), transparent 28%),
             var(--pc-bg) !important;
         overflow: hidden !important;
+    }
+
+    body.game-edit-workspace-active .generated-game-page.generated-workspace-pc .workspace-partial-notice {
+        display: flex !important;
+        align-items: center !important;
+        gap: 10px !important;
+        min-height: 34px !important;
+        padding: 7px 18px !important;
+        border-top: 1px solid rgba(250, 204, 21, 0.16) !important;
+        border-bottom: 1px solid rgba(250, 204, 21, 0.16) !important;
+        background: linear-gradient(90deg, rgba(250, 204, 21, 0.16), rgba(94, 231, 255, 0.08)) !important;
+        color: rgba(255, 251, 235, 0.92) !important;
+        font-size: 0.78rem !important;
+        line-height: 1.35 !important;
+    }
+
+    body.game-edit-workspace-active .generated-game-page.generated-workspace-pc .workspace-partial-notice strong {
+        color: #fde68a !important;
+        font-weight: 900 !important;
+        white-space: nowrap !important;
+    }
+
+    body.game-edit-workspace-active .generated-game-page.generated-workspace-pc .workspace-partial-notice span {
+        min-width: 0 !important;
+        flex: 1 1 auto !important;
+    }
+
+    body.game-edit-workspace-active .generated-game-page.generated-workspace-pc .workspace-partial-notice small {
+        color: rgba(226, 232, 240, 0.74) !important;
+        white-space: nowrap !important;
     }
 
     body.game-edit-workspace-active .generated-game-page .workspace-topbar {
