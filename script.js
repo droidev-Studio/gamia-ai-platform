@@ -6284,11 +6284,11 @@ Treat genre conventions as suggested, not confirmed, unless the user explicitly 
         const styleLabel = getProjectStyleForReceipt(project, plan);
         const gameplayLabel = getProjectGameplayForReceipt(plan);
         const tierLabel = String(deliveryTier || '').toLowerCase();
-        const skippedText = skippedLabels.length ? skippedLabels.join(', ') : 'optional polish';
+        const skippedText = skippedLabels.length ? skippedLabels.join(', ') : 'advanced finish stages';
         const summary = viewingPlayableDraft
             ? `Playable draft opened. Art/UI generation still needs recovery${skippedLabels.length ? `: ${skippedText}` : ''}.`
             : partialEnhancement
-                ? `${title} is playable now${styleLabel ? ` with ${styleLabel} art/UI` : ''}. Some polish steps were skipped: ${skippedText}.`
+                ? `${title} is playable now${styleLabel ? ` with ${styleLabel} art/UI` : ''}. Some advanced finish stages were skipped: ${skippedText}.`
             : interactiveReport && interactiveReport.ok === true
                 ? `${title} created as a finished playable game${styleLabel ? ` with ${styleLabel} art/UI` : ''}. Controls and restart passed self-tests.`
                 : validationReport && validationReport.ok === false
@@ -6298,23 +6298,23 @@ Treat genre conventions as suggested, not confirmed, unless the user explicitly 
             badge: 'Generated',
             title: viewingPlayableDraft
                 ? 'Playable draft opened in the workspace'
-                : partialEnhancement ? 'Playable game created with partial polish' : 'Finished game created in the workspace',
+                : partialEnhancement ? 'Playable game created with advanced polish skipped' : 'Finished game created in the workspace',
             summary,
             durationMs,
             changedAreas: [
-                viewingPlayableDraft ? 'Playable draft' : partialEnhancement ? 'Playable core delivered' : 'Playable runtime',
+                viewingPlayableDraft ? 'Playable draft' : partialEnhancement ? 'Verified playable version' : 'Playable runtime',
                 `Game: ${title}`,
                 ...(styleLabel && !viewingPlayableDraft ? [`Art/UI: ${styleLabel}`] : []),
                 'Game rules',
                 'Project files',
                 ...(deliveryTier ? [`Delivery tier: ${deliveryTier}`] : []),
-                ...(partialEnhancement && skippedLabels.length ? [`Skipped polish: ${skippedText}`] : [])
+                ...(partialEnhancement && skippedLabels.length ? [`Skipped finish stages: ${skippedText}`] : [])
             ],
             preservedAreas: [
                 'Selected model',
                 `Gameplay: ${gameplayLabel}`,
                 'Browser-safe preview boundary',
-                ...(partialEnhancement && !viewingPlayableDraft ? [`${tierLabel === 'core' ? 'Core playable' : 'Verified playable version'} stayed available while optional polish recovered`] : []),
+                ...(partialEnhancement && !viewingPlayableDraft ? [`${tierLabel === 'core' ? 'Core playable' : 'Verified playable version'} stayed available while finished-game stages recovered`] : []),
                 ...(viewingPlayableDraft ? ['Art/UI recovery still required before finished delivery'] : [])
             ],
             previewStatus: previewStatusFromProject(project),
@@ -9903,6 +9903,22 @@ Lock Game Type to "Bullet Hell / Flying Shooter" and genre to "bullet-hell".`
                     levelHint: 'L1'
                 });
             },
+            buildGenerationContextPackForTest(options = {}) {
+                return buildGenerationContextPack(options.spec || {
+                    gameType: 'Cozy Sim',
+                    artStyle: 'Gothic',
+                    gameSetting: 'Tea house',
+                    coreGameplay: 'Serve tea orders',
+                    playerGoal: 'Keep customers calm',
+                    mainChallenge: 'Time pressure',
+                    progressionSystem: 'Unlock recipes',
+                    difficultyLevel: 'Normal'
+                }, options.productionPlan || {
+                    title: 'Tea House Test',
+                    coreLoop: 'Read orders, brew tea, serve customers.',
+                    visualDirection: 'Readable gothic tea-house UI.'
+                }, options.productionBrief || 'FinishedGameBrief for a complete playable 2D game.', options.prompt || 'Make a gothic tea house serving game.');
+            },
             setWorkspaceInteractiveReport(report = {}) {
                 const workspace = document.querySelector('[data-game-workspace]');
                 if (!workspace || !workspace.__plan || !workspace.__plan.generatedProject) {
@@ -10081,6 +10097,8 @@ Lock Game Type to "Bullet Hell / Flying Shooter" and genre to "bullet-hell".`
             ...project,
             id: project.projectId || project.id || fallbackProjectId,
             projectId: project.projectId || project.id || fallbackProjectId,
+            revisionId: project.revisionId || project.currentRevisionId || (report && (report.revisionId || report.currentRevisionId)) || '',
+            currentRevisionId: project.currentRevisionId || project.revisionId || (report && (report.currentRevisionId || report.revisionId)) || '',
             previewUrl,
             remotePreviewUrl,
             codeFiles,
@@ -10241,6 +10259,14 @@ Lock Game Type to "Bullet Hell / Flying Shooter" and genre to "bullet-hell".`
             name: compactModelText(planTitle || compactSpec.name || compactSpec.gameSetting || compactSpec.gameType || 'AI Direct Game', 120)
         };
         const requestBrief = buildCompactProductionBriefText(requestPlan, requestSpec);
+        const contextBundle = buildGenerationContextPack(requestSpec, requestPlan, requestBrief || productionBrief, prompt);
+        recordDiagnostic('generation-context-pack', {
+            taskType: contextBundle.contextPack.taskType,
+            region: contextBundle.contextPack.region,
+            tokenEstimate: contextBundle.contextPack.tokenEstimate,
+            includedRefs: contextBundle.contextPack.includedRefs.map(ref => ({ path: ref.path, kind: ref.kind || '' })),
+            omittedReason: contextBundle.contextPack.omittedReason
+        });
         const callEventId = addExecutionEvent(
             `Calling ${activeModel.label || getModelLabel(activeModel.providerId, activeModel.modelId)}`,
             'running',
@@ -10262,6 +10288,11 @@ Lock Game Type to "Bullet Hell / Flying Shooter" and genre to "bullet-hell".`
                     gameSpec: requestSpec,
                     productionPlan: requestPlan,
                     productionBrief: requestBrief || productionBrief,
+                    contextPack: contextBundle.contextPack,
+                    taskType: contextBundle.contextPack.taskType,
+                    region: contextBundle.contextPack.region,
+                    rollingSummary: contextBundle.contextPack.rollingSummary,
+                    summaryVersion: contextBundle.contextPack.summaryVersion,
                     provider: activeModel.providerId,
                     model: activeModel.modelId,
                     modelMeta: activeModel,
@@ -10792,12 +10823,80 @@ Lock Game Type to "Bullet Hell / Flying Shooter" and genre to "bullet-hell".`
         };
     }
 
+    function buildGenerationContextPack(spec = getCurrentGameSpec(), productionPlan = null, productionBrief = '', prompt = '') {
+        const compactSpec = compactGameSpecForGeneration(spec);
+        const compactPlan = compactProductionPlanForGeneration(productionPlan, compactSpec);
+        const task = {
+            taskType: 'generate',
+            region: 'project/create'
+        };
+        const rollingSummary = {
+            schema: 'gamia-rolling-summary/v1',
+            summaryVersion: 1,
+            updatedAt: new Date().toISOString(),
+            currentGame: compactPlan?.title || compactSpec.title || compactSpec.name || 'New generated game',
+            playerGoal: compactSpec.playerGoal || compactSpec.goal || compactPlan?.coreLoop || '',
+            confirmedGameSpec: redactSensitiveDeep(compactSpec),
+            appliedChanges: [],
+            negativeConstraints: [
+                'No 3D, WebGL, Three.js, VR, multiplayer, backend calls, external dependencies, CDN, remote images, imports, fetch, XHR, WebSocket, cookies, or secrets.',
+                'Do not deliver a static screenshot, explanation page, or non-interactive canvas.'
+            ],
+            codeResourceMap: [],
+            recentFailuresAndRepair: {
+                interactiveOk: false,
+                failed: [],
+                fatalErrors: []
+            },
+            mustPreserveNext: [
+                'Deliver a complete finished 2D HTML5 Canvas game.',
+                'Keep Gamia runtime bridge start/restart/dispatchInput/getState working.',
+                'Include visible onboarding, HUD/objective feedback, Start, Restart, and completion or fail states.'
+            ]
+        };
+        const pack = redactSensitiveDeep({
+            schema: CONTEXT_PACK_VERSION,
+            taskType: task.taskType,
+            region: task.region,
+            prompt: redactSensitiveText(prompt),
+            budgetTokens: CONTEXT_PACK_BUDGETS.generate,
+            tokenEstimate: 0,
+            projectId: '',
+            baseRevision: '',
+            summaryVersion: rollingSummary.summaryVersion,
+            rollingSummary,
+            recentTurns: chatTranscript.slice(-6),
+            includedRefs: [
+                { path: 'originalPrompt', kind: 'prompt', includedSize: String(prompt || '').length },
+                { path: 'gameSpec', kind: 'confirmed_spec', includedSize: JSON.stringify(compactSpec || {}).length },
+                { path: 'finishedGameBrief', kind: 'production_brief', includedSize: String(productionBrief || '').length },
+                { path: 'productionPlan', kind: 'production_plan', includedSize: JSON.stringify(compactPlan || {}).length },
+                { path: 'runtimeBridgeContract', kind: 'platform_contract', version: GAMIA_RUNTIME_BRIDGE_VERSION }
+            ],
+            includedSummaries: [
+                { type: 'generation_rolling_summary', summaryVersion: rollingSummary.summaryVersion },
+                { type: 'recent_chat', count: Math.min(6, chatTranscript.length) }
+            ],
+            omittedReason: [
+                { path: 'runtime/index.html', reason: 'not created yet for generate task' },
+                { path: 'workspace_history', reason: 'new generation uses prompt, GameSpec, and FinishedGameBrief instead of raw chat history' }
+            ],
+            createdAt: new Date().toISOString()
+        });
+        pack.tokenEstimate = estimateContextTokens(pack);
+        return {
+            task,
+            contextPack: pack
+        };
+    }
+
     async function editAIDirectGameProject(plan, prompt, target = null) {
         const activeModel = requireActiveAIModel('AI direct game edit');
         const currentProject = plan && plan.generatedProject ? plan.generatedProject : {};
         const sourceSpec = plan && plan.generatedSpec ? plan.generatedSpec : getCurrentGameSpec();
         const workspace = document.querySelector('[data-game-workspace]');
         const contextBundle = buildWorkspaceContextPack(workspace, plan, prompt, target);
+        const workspaceIdentity = workspace ? ensureWorkspaceIdentity(workspace, plan) : null;
         const codeFiles = contextBundle.relevantCodeFiles.map(file => ({
             path: file.path,
             content: String(file.content || '')
@@ -10818,9 +10917,11 @@ Lock Game Type to "Bullet Hell / Flying Shooter" and genre to "bullet-hell".`
                 editPrompt: prompt,
                 target,
                 projectId: currentProject.projectId || currentProject.id || '',
+                sessionId: workspaceIdentity && workspaceIdentity.workspaceId ? workspaceIdentity.workspaceId : '',
                 previewUrl: currentProject.previewUrl || '',
                 currentFiles: codeFiles,
                 relevantCodeFiles: codeFiles,
+                currentFileRefs: contextBundle.contextPack.includedRefs,
                 contextPack: contextBundle.contextPack,
                 taskType: contextBundle.contextPack.taskType,
                 region: contextBundle.contextPack.region,
@@ -10989,8 +11090,10 @@ canvas, svg, video, img {
             stage.style.transform = 'none';
             const stageRect = stage.getBoundingClientRect();
             const childRects = Array.from(stage.children).map(child => child.getBoundingClientRect()).filter(rect => rect.width > 1 && rect.height > 1);
-            const contentWidth = Math.max(1, stage.scrollWidth || stageRect.width || ...childRects.map(rect => rect.right - stageRect.left));
-            const contentHeight = Math.max(1, stage.scrollHeight || stageRect.height || ...childRects.map(rect => rect.bottom - stageRect.top));
+            const contentWidths = childRects.map(rect => rect.right - stageRect.left);
+            const contentHeights = childRects.map(rect => rect.bottom - stageRect.top);
+            const contentWidth = Math.max(1, stage.scrollWidth || 0, stageRect.width || 0, ...contentWidths);
+            const contentHeight = Math.max(1, stage.scrollHeight || 0, stageRect.height || 0, ...contentHeights);
             const scale = Math.min(viewport.width / contentWidth, viewport.height / contentHeight, 1);
             const left = Math.max(0, (viewport.width - contentWidth * scale) / 2);
             const top = Math.max(0, (viewport.height - contentHeight * scale) / 2);
@@ -13836,7 +13939,7 @@ console.log('Droi generated game:', GAME_TITLE);`
         const workspaceNotice = project && project.workspaceNotice
             || generationReport.workspaceNotice
             || (project && project.partialEnhancement || generationReport.partialEnhancement
-                ? 'Playable version ready. Some polish steps did not finish.'
+                ? 'Playable version ready. Some advanced finish stages did not finish.'
                 : '');
         const workspaceNoticeHtml = workspaceNotice
             ? [
@@ -13844,7 +13947,7 @@ console.log('Droi generated game:', GAME_TITLE);`
                 '<strong>Playable version ready</strong>',
                 `<span>${escapeHtml(workspaceNotice)}</span>`,
                 deliveryTier ? `<small>Delivery tier: ${escapeHtml(deliveryTier)}</small>` : '',
-                skippedStages.length ? `<small>Skipped polish: ${skippedStages.map(stage => escapeHtml(stage.id || stage.label || 'optional stage')).join(', ')}</small>` : '',
+                skippedStages.length ? `<small>Skipped finish stages: ${skippedStages.map(stage => escapeHtml(stage.id || stage.label || 'advanced finish stage')).join(', ')}</small>` : '',
                 '</div>'
             ].join('')
             : '';
@@ -14009,10 +14112,10 @@ console.log('Droi generated game:', GAME_TITLE);`
                 ? `<div class="summary-item"><strong>Models:</strong> ${stages.map(stage => `${escapeHtml(stage.label)} ${escapeHtml(modelMetaDisplay(stage.meta))}`).join(' / ')}</div>`
                 : '',
             deliveryTier
-                ? `<div class="summary-item"><strong>Delivery tier:</strong> ${escapeHtml(deliveryTier)}${partialEnhancement ? ' / partial polish' : ''}</div>`
+                ? `<div class="summary-item"><strong>Delivery tier:</strong> ${escapeHtml(deliveryTier)}${partialEnhancement ? ' / advanced polish skipped' : ''}</div>`
                 : '',
             skippedStages.length
-                ? `<div class="summary-item"><strong>Skipped stages:</strong> ${skippedStages.map(stage => escapeHtml(stage.id || stage.label || 'optional stage')).join(', ')}</div>`
+                ? `<div class="summary-item"><strong>Skipped stages:</strong> ${skippedStages.map(stage => escapeHtml(stage.id || stage.label || 'advanced finish stage')).join(', ')}</div>`
                 : '',
             project && project.validationReport
                 ? `<div class="summary-item"><strong>Validation report:</strong> ${escapeHtml(project.validationReport.ok ? 'Passed' : 'Needs review')}</div>`
@@ -17423,7 +17526,7 @@ console.log('Droi generated game:', GAME_TITLE);`
                     `iframe ${Math.round(frameRect.width)}x${Math.round(frameRect.height)}`,
                     rootRect ? `${String(rootLabel).slice(0, 24)} ${Math.round(rootRect.width)}x${Math.round(rootRect.height)}` : 'root unavailable',
                     scrollRatio ? `scroll ${scrollRatio.toFixed(2)}x` : ''
-                ].filter(Boolean).join(' · ');
+                ].filter(Boolean).join(' | ');
             };
             const renderIframeThemeOverlay = () => {
                 const host = previewFrame.parentElement;
