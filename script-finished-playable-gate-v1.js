@@ -10096,6 +10096,9 @@ Lock Game Type to "Bullet Hell / Flying Shooter" and genre to "bullet-hell".`
             buildGenerationCompletionReceiptForTest(plan = {}, durationMs = 0) {
                 return buildGenerationCompletionReceipt(plan, durationMs);
             },
+            buildWorkspaceBuildSummaryForTest(project = {}) {
+                return buildWorkspaceBuildSummaryHtml(project);
+            },
             buildContextPackForTest(options = {}) {
                 const html = String(options.html || '<!doctype html><html><body><canvas></canvas><script>window.__GAMIA_GAME__={start(){},restart(){},dispatchInput(){},getState(){return {status:"idle",tick:0,canInteract:true}}}</script></body></html>');
                 const plan = {
@@ -14479,6 +14482,66 @@ console.log('Droi generated game:', GAME_TITLE);`
         ].join('');
     }
 
+    function normalizeWorkspacePipelineStage(stage = {}) {
+        const id = normalizePipelineStageId(stage.id || '');
+        const defaultLabels = {
+            core_playable: 'Designing playable core',
+            art_ui_apply: 'Applying art and UI resources',
+            gameplay_fit: 'Fitting gameplay to your request',
+            project_meta: 'Preparing project title and preview',
+            final_self_test: 'Testing controls and restart'
+        };
+        return {
+            id,
+            label: String(stage.label || defaultLabels[id] || stage.id || 'AI build step'),
+            status: String(stage.status || 'done').toLowerCase(),
+            summary: String(stage.summary || '')
+        };
+    }
+
+    function buildWorkspaceBuildSummaryHtml(project = {}) {
+        const report = project && project.generationReport && typeof project.generationReport === 'object'
+            ? project.generationReport
+            : {};
+        const rawStages = Array.isArray(report.pipelineStages) ? report.pipelineStages : [];
+        const stages = rawStages
+            .map(normalizeWorkspacePipelineStage)
+            .filter(stage => ['core_playable', 'art_ui_apply', 'gameplay_fit', 'project_meta', 'final_self_test'].includes(stage.id));
+        if (!stages.length) return '';
+        const deliveryTier = String(project.deliveryTier || report.deliveryTier || 'enhanced');
+        const skippedStages = getProjectSkippedStages(project);
+        const skippedText = skippedStages
+            .map(stage => String(stage.label || stage.id || '').replace(/_/g, ' '))
+            .filter(Boolean)
+            .join(', ');
+        const statusText = status => {
+            if (status === 'done' || status === 'completed' || status === 'success') return 'Done';
+            if (status === 'warning') return 'Warning';
+            if (status === 'skipped') return 'Skipped';
+            if (status === 'failed' || status === 'error') return 'Needs recovery';
+            if (status === 'running') return 'Working';
+            return 'Queued';
+        };
+        return [
+            '<section class="workspace-build-summary" data-workspace-build-summary aria-label="AI build summary">',
+            '<div class="workspace-build-summary-head">',
+            '<span>AI build summary</span>',
+            `<small>Delivery tier: ${escapeHtml(deliveryTier)}</small>`,
+            '</div>',
+            '<ol class="workspace-build-summary-steps">',
+            ...stages.map(stage => [
+                `<li class="workspace-build-step is-${escapeHtml(stage.status || 'done')}">`,
+                `<strong>${escapeHtml(stage.label)}</strong>`,
+                `<span>${escapeHtml(statusText(stage.status))}</span>`,
+                stage.summary ? `<small>${escapeHtml(stage.summary)}</small>` : '',
+                '</li>'
+            ].join('')),
+            '</ol>',
+            skippedText ? `<p class="workspace-build-summary-note">Skipped finish stages: ${escapeHtml(skippedText)}</p>` : '',
+            '</section>'
+        ].join('');
+    }
+
     function buildGeneratedEditWorkspaceHtml(generated, project = null) {
         const previewUrl = project && project.previewUrl ? resolvePreviewUrl(project.previewUrl) : '';
         const projectMeta = (project && project.projectMeta) || normalizeProjectMeta(project || {}, generated || {}, previewUrl);
@@ -14577,6 +14640,7 @@ console.log('Droi generated game:', GAME_TITLE);`
             '<div class="preview-chat-user-bubble">Ok, create it!</div>',
             `<div class="preview-chat-time">${escapeHtml(new Date().toLocaleTimeString([], { hour: 'numeric', minute: '2-digit' }))}</div>`,
             `<p class="preview-chat-assistant-note">Created <strong>${escapeHtml(projectMeta.title)}</strong>. Play it first, then describe the next edit below. I will route style, balance, controls, assets, or files automatically.</p>`,
+            buildWorkspaceBuildSummaryHtml(project || {}),
             '<div class="workspace-prompt-chips" aria-label="Suggested edit prompts">',
             '<button type="button" class="workspace-prompt-chip" data-workspace-prompt="Make the visual style warmer and more polished, while keeping the same gameplay.">Change art style</button>',
             '<button type="button" class="workspace-prompt-chip" data-workspace-prompt="Tune the difficulty so the first minute feels fair but still exciting.">Tune difficulty</button>',
