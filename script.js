@@ -5953,7 +5953,7 @@ Treat genre conventions as suggested, not confirmed, unless the user explicitly 
             updateChatWorkfeedStep(handle, id, {
                 status,
                 summary: stage.summary || (status === 'skipped'
-                    ? (isArtUiPipelineStage(id) ? 'Art/UI resources need recovery before final delivery.' : 'Advanced polish step skipped. Using latest verified playable version.')
+                    ? (isArtUiPipelineStage(id) ? 'Polish step skipped. Using verified playable core.' : 'Advanced polish step skipped. Using latest verified playable version.')
                     : status === 'done' ? 'Completed.' : '')
             });
         });
@@ -6481,8 +6481,8 @@ Treat genre conventions as suggested, not confirmed, unless the user explicitly 
                 'Selected model',
                 `Gameplay: ${gameplayLabel}`,
                 'Browser-safe preview boundary',
-                ...(partialEnhancement && !viewingPlayableDraft ? [`${tierLabel === 'core' ? 'Core playable' : 'Verified playable version'} stayed available while finished-game stages recovered`] : []),
-                ...(viewingPlayableDraft ? ['Art/UI recovery still required before finished delivery'] : [])
+                ...(partialEnhancement && !viewingPlayableDraft ? [`${tierLabel === 'core' ? 'Core playable' : 'Verified playable version'} stayed available while advanced polish was skipped`] : []),
+                ...(viewingPlayableDraft ? ['Playable draft opened by user choice'] : [])
             ],
             previewStatus: previewStatusFromProject(project),
             ranBackend: true,
