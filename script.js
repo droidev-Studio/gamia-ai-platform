@@ -9615,6 +9615,20 @@ Lock Game Type to "Bullet Hell / Flying Shooter" and genre to "bullet-hell".`
         return Boolean(value && typeof value === 'object' && value.__gamiaBridgeTimedOut === true);
     }
 
+    function getTrustedBackendInteractiveReport(project = {}) {
+        const report = project.generationReport && project.generationReport.interactiveReport ||
+            project.validationReport && project.validationReport.interactiveReport ||
+            project.interactiveReport ||
+            null;
+        const source = String(report && report.source || '').toLowerCase();
+        const backendVerified = source === 'backend_playwright';
+        const deliveryReady = project.deliveryReady === true ||
+            project.generationReport?.deliveryReady === true ||
+            project.validationReport?.deliveryReady === true ||
+            Boolean(project.generationReport?.playableVerifiedAt);
+        return report && report.ok === true && backendVerified && deliveryReady ? report : null;
+    }
+
     async function callRuntimeBridge(bridge, method, ...args) {
         if (!bridge || typeof bridge[method] !== 'function') return undefined;
         return await Promise.race([
@@ -10314,6 +10328,27 @@ Lock Game Type to "Bullet Hell / Flying Shooter" and genre to "bullet-hell".`
 
     async function ensureAIDirectProjectDeliveryReady(project, spec, productionPlan, productionBrief, activeModel, progress = null) {
         let candidate = project;
+        const backendInteractiveReport = getTrustedBackendInteractiveReport(candidate);
+        if (backendInteractiveReport) {
+            if (progress && progress.workfeedHandle) {
+                updateChatWorkfeedStep(progress.workfeedHandle, 'render_check', {
+                    status: 'done',
+                    summary: 'Backend browser render validation passed.'
+                });
+                updateChatWorkfeedStep(progress.workfeedHandle, 'self_test', {
+                    status: 'done',
+                    summary: 'Backend browser interaction self-test passed.'
+                });
+                updateChatWorkfeedStep(progress.workfeedHandle, 'repair_interaction', {
+                    status: 'skipped',
+                    summary: 'No frontend repair needed; backend Playwright self-test already passed.'
+                });
+            }
+            candidate.interactiveReport = backendInteractiveReport;
+            candidate.deliveryReady = true;
+            candidate.qualityTier = candidate.qualityTier || 'playable';
+            return candidate;
+        }
         let report = null;
         const maxRepairs = 2;
         for (let attempt = 0; attempt <= maxRepairs; attempt += 1) {
