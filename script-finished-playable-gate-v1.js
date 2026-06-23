@@ -10918,6 +10918,34 @@ Lock Game Type to "Bullet Hell / Flying Shooter" and genre to "bullet-hell".`
                         contentLength: file.content ? String(file.content).length : 0
                     }))
                 };
+            },
+            markWorkspaceUnsavedForTest(reason = 'generated_view') {
+                const workspace = document.querySelector('[data-game-workspace]');
+                if (!workspace || typeof workspace.__markWorkspaceUnsavedForTest !== 'function') {
+                    return { ok: false, reason: 'workspace_missing' };
+                }
+                return workspace.__markWorkspaceUnsavedForTest(reason);
+            },
+            async commitWorkspaceChangesForTest() {
+                const workspace = document.querySelector('[data-game-workspace]');
+                if (!workspace || typeof workspace.__commitWorkspaceChanges !== 'function') {
+                    return { ok: false, reason: 'workspace_missing' };
+                }
+                const beforeState = getWorkspaceState(workspace);
+                const beforeSaveState = beforeState.saveState;
+                const committed = await workspace.__commitWorkspaceChanges('Save Changes Test');
+                const state = getWorkspaceState(workspace);
+                const button = workspace.querySelector('[data-workspace-save-state]');
+                const status = workspace.querySelector('[data-workspace-save-status]');
+                return {
+                    ok: true,
+                    committed,
+                    beforeSaveState,
+                    saveState: state.saveState,
+                    buttonDisabled: button ? button.disabled : null,
+                    statusText: status ? status.textContent : '',
+                    commitState: state.commitState || {}
+                };
             }
         };
     }
@@ -12830,6 +12858,7 @@ canvas, svg, video, img {
     const WORKSPACE_STORE = 'workspaces';
     const WORKSPACE_CURRENT_STORE = 'current';
     const WORKSPACE_ACTIVE_HINT_KEY = 'gamia_active_workspace_hint';
+    const WORKSPACE_SNAPSHOT_FALLBACK_PREFIX = 'gamia_workspace_snapshot:';
     const WORKSPACE_SNAPSHOT_DEBOUNCE_MS = 700;
     const WORKSPACE_RESTORE_MAX_AGE_MS = 6 * 60 * 60 * 1000;
     let workspaceDbPromise = null;
@@ -12865,20 +12894,43 @@ canvas, svg, video, img {
 
     async function workspaceDbPut(storeName, value) {
         const db = await openWorkspaceRuntimeDb();
-        if (!db) return false;
-        if (!db.objectStoreNames.contains(storeName)) return false;
+        if (!db) {
+            if (typeof window !== 'undefined') window.__lastWorkspacePersistError = { storeName, message: 'IndexedDB unavailable' };
+            return false;
+        }
+        if (!db.objectStoreNames.contains(storeName)) {
+            if (typeof window !== 'undefined') window.__lastWorkspacePersistError = { storeName, message: 'Object store missing' };
+            return false;
+        }
         return new Promise(resolve => {
             let tx = null;
             try {
                 tx = db.transaction(storeName, 'readwrite');
                 tx.objectStore(storeName).put(value);
-                tx.oncomplete = () => resolve(true);
+                tx.oncomplete = () => {
+                    if (typeof window !== 'undefined') window.__lastWorkspacePersistError = null;
+                    resolve(true);
+                };
                 tx.onerror = () => {
                     console.warn('[Droi] Workspace snapshot write failed', tx.error);
+                    if (typeof window !== 'undefined') {
+                        window.__lastWorkspacePersistError = {
+                            storeName,
+                            name: tx.error && tx.error.name || '',
+                            message: tx.error && tx.error.message || String(tx.error || 'Workspace snapshot write failed')
+                        };
+                    }
                     resolve(false);
                 };
             } catch (error) {
                 console.warn('[Droi] Workspace snapshot write failed', error);
+                if (typeof window !== 'undefined') {
+                    window.__lastWorkspacePersistError = {
+                        storeName,
+                        name: error && error.name || '',
+                        message: error && error.message || String(error || 'Workspace snapshot write failed')
+                    };
+                }
                 resolve(false);
             }
         });
@@ -12904,9 +12956,81 @@ canvas, svg, video, img {
         });
     }
 
+    function workspaceSnapshotFallbackKey(workspaceId = '') {
+        return `${WORKSPACE_SNAPSHOT_FALLBACK_PREFIX}${safeWorkspaceIdSegment(workspaceId)}`;
+    }
+
+    function compactWorkspaceSnapshotForStorage(value) {
+        const seen = new WeakSet();
+        const compact = (input, key = '') => {
+            if (input == null) return input;
+            if (typeof input === 'string') {
+                if (/^data:image\/[a-z0-9.+-]+;base64,/i.test(input) && input.length > 512) {
+                    return `[workspace data url omitted:${input.length}]`;
+                }
+                if (/^(content|text|source|html)$/i.test(String(key || '')) && input.length > 2400) {
+                    return `[workspace file content omitted:${input.length}]`;
+                }
+                return input;
+            }
+            if (typeof input !== 'object') return input;
+            if (seen.has(input)) return undefined;
+            seen.add(input);
+            if (Array.isArray(input)) return input.map(item => compact(item, key)).filter(item => item !== undefined);
+            const output = {};
+            Object.entries(input).forEach(([key, item]) => {
+                const compacted = compact(item, key);
+                if (compacted !== undefined) output[key] = compacted;
+            });
+            return output;
+        };
+        return compact(value);
+    }
+
+    function persistWorkspaceSnapshotFallback(snapshot) {
+        if (!snapshot || !snapshot.workspaceId) return false;
+        try {
+            const compactSnapshot = compactWorkspaceSnapshotForStorage(snapshot);
+            localStorage.setItem(workspaceSnapshotFallbackKey(snapshot.workspaceId), JSON.stringify(compactSnapshot));
+            localStorage.setItem(WORKSPACE_ACTIVE_HINT_KEY, JSON.stringify({
+                workspaceId: snapshot.workspaceId,
+                projectId: snapshot.projectId || '',
+                updatedAt: snapshot.updatedAt || new Date().toISOString(),
+                storageMode: 'localStorage-fallback'
+            }));
+            if (typeof window !== 'undefined') window.__lastWorkspacePersistError = null;
+            return true;
+        } catch (error) {
+            console.warn('[Droi] Workspace fallback snapshot write failed', error);
+            if (typeof window !== 'undefined') {
+                window.__lastWorkspacePersistError = {
+                    storeName: 'localStorage',
+                    name: error && error.name || '',
+                    message: error && error.message || String(error || 'Workspace fallback snapshot write failed')
+                };
+            }
+            return false;
+        }
+    }
+
+    function loadWorkspaceSnapshotFallback(workspaceId = '') {
+        if (!workspaceId) return null;
+        try {
+            const raw = localStorage.getItem(workspaceSnapshotFallbackKey(workspaceId));
+            return raw ? JSON.parse(raw) : null;
+        } catch (error) {
+            return null;
+        }
+    }
+
     async function clearActiveWorkspacePointer() {
         try {
             localStorage.removeItem(WORKSPACE_ACTIVE_HINT_KEY);
+            Object.keys(localStorage).forEach(key => {
+                if (key.startsWith(WORKSPACE_SNAPSHOT_FALLBACK_PREFIX)) {
+                    localStorage.removeItem(key);
+                }
+            });
         } catch (error) {
             // Local workspace restore hint is best effort only.
         }
@@ -13103,10 +13227,19 @@ canvas, svg, video, img {
 
     async function loadActiveWorkspaceSnapshot() {
         const active = await workspaceDbGet(WORKSPACE_CURRENT_STORE, 'activeWorkspaceId');
+        if (!active || !active.workspaceId) {
+            try {
+                const hint = JSON.parse(localStorage.getItem(WORKSPACE_ACTIVE_HINT_KEY) || 'null');
+                if (hint && hint.workspaceId) return loadWorkspaceSnapshotFallback(hint.workspaceId);
+            } catch (error) {
+                return null;
+            }
+            return null;
+        }
         const workspaceId = active && active.workspaceId ? active.workspaceId : '';
         if (!workspaceId) return null;
         const snapshot = await workspaceDbGet(WORKSPACE_STORE, workspaceId);
-        return snapshot || null;
+        return snapshot || loadWorkspaceSnapshotFallback(workspaceId) || null;
     }
 
     function buildBackendProjectRestoreSnapshot(project = {}) {
@@ -13290,7 +13423,8 @@ canvas, svg, video, img {
             patches: buildWorkspacePatches(workspace),
             history: collectWorkspaceHistoryRecords(workspace),
             generationPlan: serializeWorkspaceGenerationPlan(sourcePlan),
-            exportState: { ...(state.exportState || {}) }
+            exportState: { ...(state.exportState || {}) },
+            commitState: { ...(state.commitState || {}) }
         });
     }
 
@@ -13340,6 +13474,8 @@ canvas, svg, video, img {
                 updatedAt: snapshot.updatedAt
             });
             writeActiveWorkspaceHint(snapshot);
+        } else if (persistWorkspaceSnapshotFallback(snapshot)) {
+            return true;
         }
         return ok;
     }
@@ -13352,12 +13488,39 @@ canvas, svg, video, img {
         if (ok) {
             await workspaceDbPut(WORKSPACE_CURRENT_STORE, { key: 'activeWorkspaceId', workspaceId: snapshot.workspaceId, updatedAt: snapshot.updatedAt });
             writeActiveWorkspaceHint(snapshot);
+        } else if (persistWorkspaceSnapshotFallback(snapshot)) {
+            return true;
         }
         return ok;
     }
 
+    function shouldMarkWorkspaceUnsavedForReason(reason = '') {
+        const normalized = String(reason || '');
+        if (!normalized) return false;
+        if (/generation_complete|generation_project_ready|project_info_saved|project_info_backend_saved|project_published|history|export|workspace_commit/i.test(normalized)) {
+            return false;
+        }
+        return /workspace_mode|generated_view|selected_item|tool_tab|media_|code_|numeric_draft|numeric_select|workspace_prompt|tool_artifact|project_info_draft/i.test(normalized);
+    }
+
+    function markWorkspaceUnsavedForSnapshot(workspace, reason = '') {
+        if (!workspace || !shouldMarkWorkspaceUnsavedForReason(reason)) return;
+        const state = getWorkspaceState(workspace);
+        if (state.saveState === 'saving') return;
+        state.saveState = 'unsaved';
+        workspace.dataset.saveState = 'unsaved';
+        workspace.querySelectorAll('[data-workspace-save-status]').forEach(node => {
+            node.textContent = 'Unsaved changes';
+        });
+        workspace.querySelectorAll('[data-workspace-save-state]').forEach(button => {
+            button.disabled = false;
+            button.classList.toggle('disabled', false);
+        });
+    }
+
     function scheduleWorkspaceSnapshotSave(workspace, plan, reason = 'workspace') {
         if (!workspace) return;
+        markWorkspaceUnsavedForSnapshot(workspace, reason);
         const existing = workspaceSnapshotTimers.get(workspace);
         if (existing) window.clearTimeout(existing);
         const timer = window.setTimeout(() => {
@@ -13370,7 +13533,7 @@ canvas, svg, video, img {
     async function loadWorkspaceSnapshot(workspace, plan) {
         const identity = ensureWorkspaceIdentity(workspace, plan);
         try {
-            return await workspaceDbGet(WORKSPACE_STORE, identity.workspaceId);
+            return await workspaceDbGet(WORKSPACE_STORE, identity.workspaceId) || loadWorkspaceSnapshotFallback(identity.workspaceId);
         } catch (error) {
             console.warn('[Droi] Workspace snapshot restore failed', error);
             return null;
@@ -13409,6 +13572,7 @@ canvas, svg, video, img {
         state.toolArtifacts = Array.isArray(patches.toolArtifacts) ? patches.toolArtifacts : state.toolArtifacts || [];
         state.historyRecords = Array.isArray(snapshot.history) ? snapshot.history : [];
         state.exportState = snapshot.exportState || state.exportState || {};
+        state.commitState = snapshot.commitState || state.commitState || {};
         const projectInfo = snapshot.projectInfo || {};
         state.projectInfoDraft = projectInfo.draft && typeof projectInfo.draft === 'object' ? { ...projectInfo.draft } : state.projectInfoDraft || {};
         state.projectInfoDirty = Boolean(projectInfo.dirty);
@@ -15209,14 +15373,14 @@ console.log('Droi generated game:', GAME_TITLE);`
         if (saveChangesButton) {
             saveChangesButton.dataset.workspaceSaveState = '';
             saveChangesButton.disabled = true;
-            saveChangesButton.textContent = 'Save Info';
+            saveChangesButton.textContent = 'Save Changes';
         } else if (!actions.querySelector('[data-workspace-save-state]')) {
             const button = document.createElement('button');
             button.type = 'button';
             button.className = 'workspace-header-btn workspace-save-changes-btn';
             button.dataset.workspaceSaveState = '';
             button.disabled = true;
-            button.textContent = 'Save Info';
+            button.textContent = 'Save Changes';
             actions.appendChild(button);
         }
     }
@@ -15391,7 +15555,7 @@ console.log('Droi generated game:', GAME_TITLE);`
             '</div>',
             '</div>',
             '<button type="button" class="workspace-header-btn" data-workspace-publish disabled title="Complete project info and playable preview verification before publishing.">Publish</button>',
-            '<button type="button" class="workspace-header-btn workspace-save-changes-btn" data-workspace-save-state disabled>Save Info</button>',
+            '<button type="button" class="workspace-header-btn workspace-save-changes-btn" data-workspace-save-state disabled>Save Changes</button>',
             '</div>',
             '</header>',
             workspaceNoticeHtml,
@@ -17345,6 +17509,63 @@ console.log('Droi generated game:', GAME_TITLE);`
             return true;
         }
 
+        function summarizeProjectMetaForWorkspaceCommit(projectMeta = {}) {
+            const cover = projectMeta.coverImage && typeof projectMeta.coverImage === 'object' ? projectMeta.coverImage : {};
+            return {
+                title: projectMeta.title || projectMeta.projectName || '',
+                projectName: projectMeta.projectName || projectMeta.title || '',
+                description: projectMeta.description || projectMeta.englishDescription || '',
+                englishDescription: projectMeta.englishDescription || projectMeta.description || '',
+                language: projectMeta.language || 'en',
+                coverImage: {
+                    status: cover.status || '',
+                    path: cover.path || '',
+                    prompt: cover.prompt || '',
+                    hasUrl: Boolean(cover.url)
+                },
+                updatedAt: projectMeta.updatedAt || ''
+            };
+        }
+
+        async function commitWorkspaceChanges(source = 'Save Changes') {
+            if (state.saveState !== 'unsaved' && !state.projectInfoDirty) {
+                updateWorkspaceSaveState('saved');
+                return false;
+            }
+            updateWorkspaceSaveState('saving');
+            const nextMeta = {
+                ...currentProjectInfoDraft(),
+                language: 'en',
+                updatedAt: new Date().toISOString()
+            };
+            if (!nextMeta.coverImage || typeof nextMeta.coverImage !== 'object') {
+                nextMeta.coverImage = { status: 'preview_screenshot_pending', path: '', prompt: '' };
+            }
+            syncProjectMetaToGeneratedProject(plan, nextMeta);
+            state.projectInfoDraft = {};
+            state.projectInfoDirty = false;
+            state.commitState = {
+                committedAt: new Date().toISOString(),
+                source,
+                uiState: collectWorkspaceUiState(workspace),
+                numericDraft: collectWorkspaceNumericDraft(workspace),
+                projectMeta: summarizeProjectMetaForWorkspaceCommit(nextMeta),
+                revisionId: plan && plan.generatedProject ? (plan.generatedProject.currentRevisionId || plan.generatedProject.revisionId || '') : '',
+                historyCount: collectWorkspaceHistoryRecords(workspace).length
+            };
+            refreshProjectInfoFields();
+            updateWorkspacePublishState();
+            refreshWorkspaceCodePanel(workspace, plan);
+            const persisted = await persistWorkspaceSnapshot(workspace, plan, 'workspace_commit');
+            if (persisted) {
+                updateWorkspaceSaveState('saved', 'Changes saved');
+            } else {
+                updateWorkspaceSaveState('failed', 'Save failed');
+            }
+            persistProjectInfoMetadata(nextMeta, source);
+            return persisted;
+        }
+
         async function persistProjectInfoMetadata(projectMeta, source = 'Save project info') {
             const project = plan && plan.generatedProject ? plan.generatedProject : {};
             const projectId = project.projectId || project.id || resolveWorkspaceProjectId(plan);
@@ -17472,6 +17693,19 @@ console.log('Droi generated game:', GAME_TITLE);`
             }
         }
 
+        workspace.__commitWorkspaceChanges = commitWorkspaceChanges;
+        workspace.__markWorkspaceUnsavedForTest = (reason = 'generated_view') => {
+            scheduleWorkspaceSnapshotSave(workspace, plan, reason);
+            const button = workspace.querySelector('[data-workspace-save-state]');
+            const status = workspace.querySelector('[data-workspace-save-status]');
+            return {
+                ok: true,
+                saveState: state.saveState,
+                buttonDisabled: button ? button.disabled : null,
+                statusText: status ? status.textContent : ''
+            };
+        };
+
         function getPublishedWorkspaceUrl() {
             const project = plan && plan.generatedProject ? plan.generatedProject : {};
             const publicUrl = (state.publishResult && state.publishResult.publicUrl)
@@ -17563,7 +17797,9 @@ console.log('Droi generated game:', GAME_TITLE);`
             });
             if (inputs.save) inputs.save.addEventListener('click', () => commitProjectInfoChanges('Save project info'));
             workspace.querySelectorAll('[data-workspace-save-state]').forEach(button => {
-                button.addEventListener('click', () => commitProjectInfoChanges('Save Info'));
+                button.addEventListener('click', () => {
+                    commitWorkspaceChanges('Save Changes');
+                });
             });
             workspace.querySelectorAll('[data-workspace-publish]').forEach(button => {
                 button.addEventListener('click', event => {
