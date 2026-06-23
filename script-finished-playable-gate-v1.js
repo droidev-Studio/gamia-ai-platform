@@ -10904,6 +10904,20 @@ Lock Game Type to "Bullet Hell / Flying Shooter" and genre to "bullet-hell".`
                     afterHistoryCount,
                     statusText: status ? status.textContent : ''
                 };
+            },
+            buildWorkspaceExportFilesForTest() {
+                const workspace = document.querySelector('[data-game-workspace]');
+                if (!workspace || !workspace.__plan) return { ok: false, reason: 'workspace_missing' };
+                const files = buildWorkspaceExportFiles(workspace, workspace.__plan);
+                return {
+                    ok: true,
+                    files: files.map(file => ({
+                        path: file.path,
+                        hasBytes: Boolean(file.bytes),
+                        byteLength: file.bytes ? file.bytes.length : 0,
+                        contentLength: file.content ? String(file.content).length : 0
+                    }))
+                };
             }
         };
     }
@@ -14578,6 +14592,41 @@ console.log('Droi generated game:', GAME_TITLE);`
         };
     }
 
+    function dataUrlToWorkspaceBytes(dataUrl = '') {
+        const match = String(dataUrl || '').match(/^data:([^;,]+)?(;base64)?,([\s\S]*)$/i);
+        if (!match) return null;
+        try {
+            const payload = match[3] || '';
+            if (match[2]) {
+                const binary = atob(payload);
+                const bytes = new Uint8Array(binary.length);
+                for (let index = 0; index < binary.length; index += 1) bytes[index] = binary.charCodeAt(index);
+                return bytes;
+            }
+            return new TextEncoder().encode(decodeURIComponent(payload));
+        } catch (error) {
+            recordDiagnostic('workspace-data-url-decode-failed', {
+                message: error && (error.message || String(error))
+            });
+            return null;
+        }
+    }
+
+    function workspaceCoverExportEntry(project = {}) {
+        const meta = project && project.projectMeta && typeof project.projectMeta === 'object' ? project.projectMeta : {};
+        const cover = meta.coverImage && typeof meta.coverImage === 'object' ? meta.coverImage : {};
+        const coverUrl = String(cover.url || '');
+        if (!coverUrl.startsWith('data:')) return null;
+        const bytes = dataUrlToWorkspaceBytes(coverUrl);
+        if (!bytes || !bytes.length) return null;
+        const rawPath = normalizeWorkspacePath(cover.path || 'preview_screenshot.png');
+        const path = /\.(png|jpg|jpeg|webp)$/i.test(rawPath) ? rawPath : 'preview_screenshot.png';
+        return {
+            path,
+            bytes
+        };
+    }
+
     function buildWorkspaceExportFiles(workspace, plan) {
         const project = plan && plan.generatedProject ? plan.generatedProject : null;
         const generated = plan && plan.generatedSpec ? plan.generatedSpec : null;
@@ -14603,6 +14652,13 @@ console.log('Droi generated game:', GAME_TITLE);`
         };
         if (project && project.projectMeta) {
             upsert('project-meta.json', JSON.stringify(stripSensitiveWorkspaceKeys(project.projectMeta), null, 2));
+            const coverEntry = workspaceCoverExportEntry(project);
+            if (coverEntry) upsert(coverEntry.path, '');
+            if (coverEntry) {
+                const index = files.findIndex(file => normalizeWorkspacePath(file.path) === normalizeWorkspacePath(coverEntry.path));
+                if (index >= 0) files[index] = coverEntry;
+                else files.push(coverEntry);
+            }
         }
         upsert('workspace-session.json', JSON.stringify(sessionExport, null, 2));
         upsert('workspace-ui-state.json', JSON.stringify(stripSensitiveWorkspaceKeys(uiStateExport), null, 2));
