@@ -6193,12 +6193,34 @@ Treat genre conventions as suggested, not confirmed, unless the user explicitly 
         };
     }
 
+    function getFinishedDemandFidelityStatus(project = {}) {
+        const report = getProjectGenerationReportObject(project);
+        const fidelity = project.demandFidelityReport || report.demandFidelityReport || null;
+        if (!fidelity || typeof fidelity !== 'object') {
+            return {
+                ok: true,
+                missing: ['demandFidelityReport'],
+                report
+            };
+        }
+        const severity = String(fidelity.severity || '').toLowerCase();
+        const decision = String(fidelity.decision || '').toLowerCase();
+        const failed = fidelity.ok === false || severity === 'major' || decision === 'block_finished_delivery';
+        return {
+            ok: !failed,
+            warning: !failed && (severity === 'minor' || decision === 'deliver_with_soft_note'),
+            fidelity,
+            report
+        };
+    }
+
     function getFinishedPlayableGateStatus(project = {}) {
         const deliveryTier = getProjectDeliveryTier(project);
         const skippedStages = getProjectSkippedStages(project);
         const skippedIds = skippedStages.map(stage => String(stage.id || stage.label || '').toLowerCase());
         const artUiSkipped = skippedIds.some(id => id === 'art_ui_apply' || id === 'visual_enhance');
         const interactiveStatus = getFinishedInteractiveReportStatus(project);
+        const fidelityStatus = getFinishedDemandFidelityStatus(project);
         const hasPreview = Boolean(project.previewUrl || getAIDirectProjectHtml(project));
         const hasIndex = hasProjectCodeFile(project, /(?:^|\/)index\.html$/i) || Boolean(getAIDirectProjectHtml(project));
         const hasReport = hasProjectCodeFile(project, /(?:^|\/)generation-report\.json$/i) || Boolean(project.generationReport);
@@ -6257,6 +6279,25 @@ Treat genre conventions as suggested, not confirmed, unless the user explicitly 
                 skippedStages
             };
         }
+        if (!fidelityStatus.ok) {
+            const fidelity = fidelityStatus.fidelity || {};
+            const failedDimensions = Array.isArray(fidelity.failedDimensions) ? fidelity.failedDimensions : [];
+            const staleSignals = Array.isArray(fidelity.staleControlSignals) ? fidelity.staleControlSignals : [];
+            const detail = [
+                failedDimensions.length ? `Off-direction dimensions: ${failedDimensions.join(', ')}.` : '',
+                staleSignals.length ? `Mismatched controls: ${staleSignals.join(', ')}.` : ''
+            ].filter(Boolean).join(' ');
+            return {
+                ok: false,
+                reason: 'spec_fidelity_mismatch',
+                title: 'Game direction needs recovery',
+                message: detail || 'The game is playable, but it does not match the confirmed direction closely enough to deliver as a finished workspace.',
+                deliveryTier: 'off_direction_draft',
+                skippedStages,
+                demandFidelityReport: fidelity,
+                recoveryActions: fidelity.recoveryActions || ['retry', 'refine_direction', 'keep_playable_draft']
+            };
+        }
         if (artUiSkipped || !artUiStatus.ok) {
             return {
                 ok: false,
@@ -6307,7 +6348,8 @@ Treat genre conventions as suggested, not confirmed, unless the user explicitly 
             ok: true,
             reason: 'finished_playable_ready',
             deliveryTier,
-            skippedStages
+            skippedStages,
+            fidelityWarning: fidelityStatus.warning ? fidelityStatus.fidelity : null
         };
     }
 
@@ -6325,7 +6367,8 @@ Treat genre conventions as suggested, not confirmed, unless the user explicitly 
             skippedLabels.length ? `<div class="summary-item"><strong>Needs recovery:</strong> ${escapeHtml(skippedLabels.join(', '))}</div>` : '',
             '<div class="summary-actions">',
             '<button type="button" class="summary-action primary" data-finished-gate-action="retry">Retry finished game</button>',
-            '<button type="button" class="summary-action secondary" data-finished-gate-action="view_draft">View playable draft</button>',
+            '<button type="button" class="summary-action secondary" data-finished-gate-action="refine_direction">Refine direction</button>',
+            '<button type="button" class="summary-action secondary" data-finished-gate-action="view_draft">Keep playable draft</button>',
             '</div>',
             '</div>'
         ].filter(Boolean).join('');
@@ -6334,6 +6377,7 @@ Treat genre conventions as suggested, not confirmed, unless the user explicitly 
                 button.addEventListener('click', () => {
                     const action = button.dataset.finishedGateAction;
                     if (action === 'retry' && typeof handlers.onRetry === 'function') handlers.onRetry();
+                    if (action === 'refine_direction' && typeof handlers.onRefineDirection === 'function') handlers.onRefineDirection();
                     if (action === 'view_draft' && typeof handlers.onViewDraft === 'function') handlers.onViewDraft();
                 });
             });
@@ -9571,6 +9615,20 @@ Lock Game Type to "Bullet Hell / Flying Shooter" and genre to "bullet-hell".`
         return Boolean(value && typeof value === 'object' && value.__gamiaBridgeTimedOut === true);
     }
 
+    function getTrustedBackendInteractiveReport(project = {}) {
+        const report = project.generationReport && project.generationReport.interactiveReport ||
+            project.validationReport && project.validationReport.interactiveReport ||
+            project.interactiveReport ||
+            null;
+        const source = String(report && report.source || '').toLowerCase();
+        const backendVerified = source === 'backend_playwright';
+        const deliveryReady = project.deliveryReady === true ||
+            project.generationReport?.deliveryReady === true ||
+            project.validationReport?.deliveryReady === true ||
+            Boolean(project.generationReport?.playableVerifiedAt);
+        return report && report.ok === true && backendVerified && deliveryReady ? report : null;
+    }
+
     async function callRuntimeBridge(bridge, method, ...args) {
         if (!bridge || typeof bridge[method] !== 'function') return undefined;
         return await Promise.race([
@@ -10270,6 +10328,27 @@ Lock Game Type to "Bullet Hell / Flying Shooter" and genre to "bullet-hell".`
 
     async function ensureAIDirectProjectDeliveryReady(project, spec, productionPlan, productionBrief, activeModel, progress = null) {
         let candidate = project;
+        const backendInteractiveReport = getTrustedBackendInteractiveReport(candidate);
+        if (backendInteractiveReport) {
+            if (progress && progress.workfeedHandle) {
+                updateChatWorkfeedStep(progress.workfeedHandle, 'render_check', {
+                    status: 'done',
+                    summary: 'Backend browser render validation passed.'
+                });
+                updateChatWorkfeedStep(progress.workfeedHandle, 'self_test', {
+                    status: 'done',
+                    summary: 'Backend browser interaction self-test passed.'
+                });
+                updateChatWorkfeedStep(progress.workfeedHandle, 'repair_interaction', {
+                    status: 'skipped',
+                    summary: 'No frontend repair needed; backend Playwright self-test already passed.'
+                });
+            }
+            candidate.interactiveReport = backendInteractiveReport;
+            candidate.deliveryReady = true;
+            candidate.qualityTier = candidate.qualityTier || 'playable';
+            return candidate;
+        }
         let report = null;
         const maxRepairs = 2;
         for (let attempt = 0; attempt <= maxRepairs; attempt += 1) {
@@ -20719,7 +20798,10 @@ HTML5 Constraints: Canvas, playable, responsive, no external dependencies, singl
                 chatHistory.classList.remove('is-generating');
                 const inputArea = document.querySelector('.chat-input-wrapper');
                 if (inputArea) inputArea.style.display = '';
-                updateChatWorkfeedStep(generationWorkfeed, finishedGate.reason === 'art_ui_incomplete' ? 'art_ui_apply' : 'final_self_test', {
+                const recoveryStep = finishedGate.reason === 'art_ui_incomplete'
+                    ? 'art_ui_apply'
+                    : finishedGate.reason === 'spec_fidelity_mismatch' ? 'gameplay_fit' : 'final_self_test';
+                updateChatWorkfeedStep(generationWorkfeed, recoveryStep, {
                     status: 'warning',
                     summary: finishedGate.message
                 });
@@ -20736,12 +20818,23 @@ HTML5 Constraints: Canvas, playable, responsive, no external dependencies, singl
                         }
                         runGenerationAnimation(plan);
                     },
+                    onRefineDirection: () => {
+                        addBotMessage('<div class="selection-summary"><div class="summary-title">Refine direction</div><div class="summary-item">Tell me what should stay, what is off, and which part to regenerate. I will keep the playable draft separate until the next version passes delivery gates.</div></div>');
+                        const inputArea = document.querySelector('.chat-input-wrapper');
+                        if (inputArea) inputArea.style.display = '';
+                        const promptInput = document.querySelector('.chat-input, #chatInput, textarea[name="chat"]');
+                        if (promptInput && typeof promptInput.focus === 'function') promptInput.focus();
+                    },
                     onViewDraft: () => {
                         if (plan && plan.generatedProject) {
                             plan.generatedProject.__viewingPlayableDraft = true;
-                            plan.generatedProject.deliveryTier = plan.generatedProject.deliveryTier || 'core';
+                            plan.generatedProject.deliveryTier = finishedGate.reason === 'spec_fidelity_mismatch'
+                                ? 'off_direction_draft'
+                                : (plan.generatedProject.deliveryTier || 'core');
                             plan.generatedProject.workspaceNotice = plan.generatedProject.workspaceNotice
-                                || 'Playable draft opened. Art/UI generation still needs recovery before this is a finished game.';
+                                || (finishedGate.reason === 'spec_fidelity_mismatch'
+                                    ? 'Playable draft opened by user choice. It is off direction and is not ready for publish or ZIP export.'
+                                    : 'Playable draft opened. Art/UI generation still needs recovery before this is a finished game.');
                         }
                         showAutoGenerationResult(plan, {
                             onMounted: () => {
