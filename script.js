@@ -10180,7 +10180,10 @@ Lock Game Type to "Bullet Hell / Flying Shooter" and genre to "bullet-hell".`
 
     function markCoreFallbackInteractiveWarningDelivery(project = {}, report = {}, reason = '') {
         if (!project || project.__coreFallbackApplied !== true) return null;
-        const rendered = report && (report.rendered === true || report.canvasVisible === true || report.browserRenderOk === true);
+        const validationReport = project.validationReport || {};
+        const rendered = report && (report.rendered === true || report.canvasVisible === true || report.browserRenderOk === true) ||
+            validationReport.ok === true ||
+            validationReport.browserRender?.ok === true;
         if (!rendered) return null;
         const warningStage = {
             id: 'final_self_test',
