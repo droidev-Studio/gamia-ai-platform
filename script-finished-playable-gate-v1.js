@@ -6208,9 +6208,11 @@ Treat genre conventions as suggested, not confirmed, unless the user explicitly 
         const projectMetaReady = projectMeta.ready === true && hasProjectMetaFile;
         const artUiStatus = getFinishedArtUiEvidenceStatus(project);
         const finishedPlayableReady = project.finishedPlayableReady ?? report.finishedPlayableReady;
+        const warningDelivery = report.interactiveWarningDelivery === true ||
+            project.interactiveWarningDelivery === true;
 
         if (deliveryTier === 'core') {
-            if (!interactiveStatus.ok) {
+            if (!interactiveStatus.ok && !warningDelivery) {
                 return {
                     ok: false,
                     reason: 'self_test_incomplete',
@@ -6235,11 +6237,14 @@ Treat genre conventions as suggested, not confirmed, unless the user explicitly 
             }
             return {
                 ok: true,
-                reason: 'core_playable_partial_ready',
+                reason: warningDelivery ? 'core_playable_interactive_warning' : 'core_playable_partial_ready',
                 title: 'Playable core ready',
-                message: 'Playable version ready. Some polish steps did not finish.',
+                message: warningDelivery
+                    ? 'Playable version ready with an interaction warning. You can preview the Core version while controls are flagged for review.'
+                    : 'Playable version ready. Some polish steps did not finish.',
                 deliveryTier,
-                skippedStages
+                skippedStages,
+                interactiveWarning: warningDelivery
             };
         }
         if (finishedPlayableReady === false) {
@@ -10173,6 +10178,66 @@ Lock Game Type to "Bullet Hell / Flying Shooter" and genre to "bullet-hell".`
         };
     }
 
+    function markCoreFallbackInteractiveWarningDelivery(project = {}, report = {}, reason = '') {
+        if (!project || project.__coreFallbackApplied !== true) return null;
+        const rendered = report && (report.rendered === true || report.canvasVisible === true || report.browserRenderOk === true);
+        if (!rendered) return null;
+        const warningStage = {
+            id: 'final_self_test',
+            label: 'Testing controls and restart',
+            status: 'warning',
+            startedAt: report.testedAt || new Date().toISOString(),
+            finishedAt: new Date().toISOString(),
+            summary: 'Core preview rendered, but interaction self-test needs follow-up.',
+            evidence: report || {},
+            errorCode: 'INTERACTIVE_SELF_TEST_WARNING'
+        };
+        const warningReport = {
+            ...(project.generationReport || {}),
+            deliveryTier: 'core',
+            partialEnhancement: true,
+            finishedPlayableReady: true,
+            artUiApplied: false,
+            interactiveReport: report || project.interactiveReport || null,
+            interactiveWarningDelivery: true,
+            deliveryReady: true,
+            qualityTier: 'rendered',
+            repairWarning: reason || 'Core Playable rendered, but interaction repair could not finish.',
+            skippedStages: [
+                ...(Array.isArray(project.generationReport?.skippedStages) ? project.generationReport.skippedStages : []),
+                {
+                    id: 'interactive_self_test_warning',
+                    label: 'Interaction self-test warning',
+                    reason: reason || 'repair_failed',
+                    message: 'Core Playable rendered, but Start/input/Restart verification needs follow-up.'
+                }
+            ],
+            workspaceNotice: 'Playable Core version is ready. Interaction verification needs follow-up, so Publish stays disabled until controls are repaired.',
+            sourceTrace: {
+                ...(project.generationReport?.sourceTrace || {}),
+                fallback: 'core_playable_after_enhanced_self_test_failure',
+                warningDelivery: 'interactive_self_test_warning'
+            },
+            pipelineStages: upsertGenerationPipelineStage(
+                project.generationReport && project.generationReport.pipelineStages,
+                warningStage
+            )
+        };
+        project.generationReport = warningReport;
+        project.deliveryTier = 'core';
+        project.partialEnhancement = true;
+        project.finishedPlayableReady = true;
+        project.artUiApplied = false;
+        project.deliveryReady = true;
+        project.qualityTier = 'rendered';
+        project.interactiveWarningDelivery = true;
+        project.workspaceNotice = warningReport.workspaceNotice;
+        project.skippedStages = warningReport.skippedStages;
+        project.interactiveReport = report || project.interactiveReport || null;
+        updateProjectGenerationReportFile(project, warningReport);
+        return project;
+    }
+
     async function ensureAIDirectProjectDeliveryReady(project, spec, productionPlan, productionBrief, activeModel, progress = null) {
         let candidate = project;
         let report = null;
@@ -10300,7 +10365,29 @@ Lock Game Type to "Bullet Hell / Flying Shooter" and genre to "bullet-hell".`
                     summary: `Repairing interaction issue (${attempt + 1}/${maxRepairs})...`
                 });
             }
-            candidate = await repairAIDirectProjectForInteraction(candidate, report, spec, productionPlan, productionBrief, activeModel, attempt + 1);
+            try {
+                candidate = await repairAIDirectProjectForInteraction(candidate, report, spec, productionPlan, productionBrief, activeModel, attempt + 1);
+            } catch (repairError) {
+                const warningProject = markCoreFallbackInteractiveWarningDelivery(
+                    candidate,
+                    report,
+                    repairError && (repairError.code || repairError.message) || 'repair_failed'
+                );
+                if (warningProject) {
+                    if (progress && progress.workfeedHandle) {
+                        updateChatWorkfeedStep(progress.workfeedHandle, 'repair_interaction', {
+                            status: 'warning',
+                            summary: 'Model repair failed. Opening the rendered Core Playable with controls flagged for follow-up.'
+                        });
+                        updateChatWorkfeedStep(progress.workfeedHandle, 'self_test', {
+                            status: 'warning',
+                            summary: 'Core preview rendered, but interaction verification needs follow-up.'
+                        });
+                    }
+                    return warningProject;
+                }
+                throw repairError;
+            }
         }
         if (progress && progress.workfeedHandle) {
             updateChatWorkfeedStep(progress.workfeedHandle, 'self_test', {
@@ -10340,6 +10427,20 @@ Lock Game Type to "Bullet Hell / Flying Shooter" and genre to "bullet-hell".`
                 status: 'failed',
                 summary: `Interaction repair could not produce a verified playable game after ${maxRepairs} attempts.`
             });
+        }
+        const warningProject = markCoreFallbackInteractiveWarningDelivery(candidate, report, 'repair_attempts_exhausted');
+        if (warningProject) {
+            if (progress && progress.workfeedHandle) {
+                updateChatWorkfeedStep(progress.workfeedHandle, 'repair_interaction', {
+                    status: 'warning',
+                    summary: 'Opening rendered Core Playable with controls flagged for follow-up.'
+                });
+                updateChatWorkfeedStep(progress.workfeedHandle, 'self_test', {
+                    status: 'warning',
+                    summary: 'Core preview rendered, but interaction verification needs follow-up.'
+                });
+            }
+            return warningProject;
         }
         throw createInteractiveSelfTestError(candidate, report);
     }
@@ -10399,6 +10500,9 @@ Lock Game Type to "Bullet Hell / Flying Shooter" and genre to "bullet-hell".`
             },
             applyInteractiveReportToProjectForTest(project = {}, report = {}, repairAttempts = 0) {
                 return applyInteractiveReportToProject(project, report, repairAttempts);
+            },
+            markCoreFallbackInteractiveWarningDeliveryForTest(project = {}, report = {}, reason = '') {
+                return markCoreFallbackInteractiveWarningDelivery(project, report, reason);
             },
             async ensureAIDirectProjectDeliveryReadyForTest(project = {}, spec = {}) {
                 return ensureAIDirectProjectDeliveryReady(
