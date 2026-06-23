@@ -5929,6 +5929,31 @@ Treat genre conventions as suggested, not confirmed, unless the user explicitly 
         return normalized === 'gameplay_fit' || normalized === 'art_ui_apply' || normalized === 'project_meta';
     }
 
+    function getPipelineRunningSummary(stageId = '', eventType = '', stage = {}) {
+        const normalized = normalizePipelineStageId(stageId);
+        const heartbeat = eventType === 'stage_heartbeat' || eventType === 'heartbeat';
+        if (heartbeat) {
+            if (normalized === 'core_playable') {
+                return 'Still building the playable core with the selected model. This is the only hard gate before a workspace can be delivered.';
+            }
+            if (isSoftPipelineStage(normalized)) {
+                return 'Still polishing with the selected model. If this step cannot finish, the latest verified playable version will be delivered.';
+            }
+            if (normalized === 'final_self_test') {
+                return 'Still validating the playable preview. The latest verified version will be used if final checks cannot improve it.';
+            }
+            return 'Still working with the selected model. You can keep waiting or cancel.';
+        }
+        return stage.summary || 'Working...';
+    }
+
+    function getPipelineSkippedSummary(stageId = '', stage = {}) {
+        if (stage && stage.summary) return stage.summary;
+        return isArtUiPipelineStage(stageId)
+            ? 'Polish step skipped. Using verified playable core.'
+            : 'Advanced polish step skipped. Using latest verified playable version.';
+    }
+
     function syncGenerationPipelineWorkfeed(handle, project = {}) {
         if (!handle || !project) return handle;
         const stages = project.generationReport && Array.isArray(project.generationReport.pipelineStages)
@@ -5953,7 +5978,7 @@ Treat genre conventions as suggested, not confirmed, unless the user explicitly 
             updateChatWorkfeedStep(handle, id, {
                 status,
                 summary: stage.summary || (status === 'skipped'
-                    ? (isArtUiPipelineStage(id) ? 'Polish step skipped. Using verified playable core.' : 'Advanced polish step skipped. Using latest verified playable version.')
+                    ? getPipelineSkippedSummary(id, stage)
                     : status === 'done' ? 'Completed.' : '')
             });
         });
@@ -6150,6 +6175,14 @@ Treat genre conventions as suggested, not confirmed, unless the user explicitly 
         return true;
     }
 
+    function hasArtifactVerifiedReportField(value) {
+        if (!hasMeaningfulReportField(value) || typeof value !== 'object') return false;
+        const verifiedFrom = String(value.verifiedFrom || value.evidenceSource || '').toLowerCase();
+        if (verifiedFrom === 'artifact') return true;
+        const evidence = Array.isArray(value.artifactEvidence) ? value.artifactEvidence : [];
+        return evidence.length >= 3 && verifiedFrom !== 'model_claim';
+    }
+
     function getFinishedArtUiEvidenceStatus(project = {}) {
         const report = getProjectGenerationReportObject(project);
         const explicit = project.artUiApplied ?? report.artUiApplied;
@@ -6169,9 +6202,13 @@ Treat genre conventions as suggested, not confirmed, unless the user explicitly 
         const missing = Object.entries(evidence)
             .filter(([, value]) => !hasMeaningfulReportField(value))
             .map(([key]) => key);
+        const modelClaimOnly = Object.entries(evidence)
+            .filter(([, value]) => hasMeaningfulReportField(value) && !hasArtifactVerifiedReportField(value))
+            .map(([key]) => key);
         return {
-            ok: explicit === true && missing.length === 0,
+            ok: explicit === true && missing.length === 0 && modelClaimOnly.length === 0,
             missing: explicit === true ? missing : ['artUiApplied', ...missing],
+            modelClaimOnly,
             report,
             evidence
         };
@@ -6299,16 +6336,21 @@ Treat genre conventions as suggested, not confirmed, unless the user explicitly 
             };
         }
         if (artUiSkipped || !artUiStatus.ok) {
+            const modelClaimOnly = Array.isArray(artUiStatus.modelClaimOnly) ? artUiStatus.modelClaimOnly : [];
+            const artEvidenceDetail = modelClaimOnly.length
+                ? ` Evidence must come from the generated artifact, not model claims: ${modelClaimOnly.join(', ')}.`
+                : '';
             return {
                 ok: false,
                 reason: 'art_ui_incomplete',
                 title: 'Playable core ready',
                 message: artUiStatus.missing && artUiStatus.missing.length
-                    ? `Playable core ready, art/UI generation still needs recovery. Missing report fields: ${artUiStatus.missing.join(', ')}.`
-                    : 'Playable core ready, art/UI generation still needs recovery.',
+                    ? `Playable core ready, art/UI generation still needs recovery. Missing report fields: ${artUiStatus.missing.join(', ')}.${artEvidenceDetail}`
+                    : `Playable core ready, art/UI generation still needs recovery.${artEvidenceDetail}`,
                 deliveryTier: deliveryTier || 'core',
                 skippedStages,
-                missingReportFields: artUiStatus.missing || []
+                missingReportFields: artUiStatus.missing || [],
+                modelClaimOnly
             };
         }
         if (!interactiveStatus.ok) {
@@ -11115,10 +11157,10 @@ Lock Game Type to "Bullet Hell / Flying Shooter" and genre to "bullet-hell".`
                     : 'done';
         updateChatWorkfeedStep(handle, stageId, {
             status,
-            summary: stage.summary || (status === 'running'
-                ? (type === 'stage_heartbeat' || type === 'heartbeat' ? 'Still working with the selected model. You can keep waiting or cancel.' : 'Working...')
-                : status === 'skipped'
-                    ? (isArtUiPipelineStage(stageId) ? 'Polish step skipped. Using verified playable core.' : 'Advanced polish step skipped. Using latest verified playable version.')
+            summary: status === 'running'
+                ? getPipelineRunningSummary(stageId, type, stage)
+                : stage.summary || (status === 'skipped'
+                    ? getPipelineSkippedSummary(stageId, stage)
                     : 'Completed.')
         });
     }
