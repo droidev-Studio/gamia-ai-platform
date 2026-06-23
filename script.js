@@ -10249,6 +10249,7 @@ Lock Game Type to "Bullet Hell / Flying Shooter" and genre to "bullet-hell".`
                         coreFallback.qualityTier = 'playable';
                         return coreFallback;
                     }
+                    candidate = coreFallback;
                     report = fallbackReport;
                 }
             }
