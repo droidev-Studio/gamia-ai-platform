@@ -9508,16 +9508,14 @@ Lock Game Type to "Bullet Hell / Flying Shooter" and genre to "bullet-hell".`
     function shouldTryRuntimeBridgeAdapterBeforeModelRepair(report = {}) {
         if (!report || report.ok) return false;
         const failed = Array.isArray(report.failed) ? report.failed.map(item => String(item).toLowerCase()) : [];
-        const onlyRestartFailed = failed.length > 0 && failed.every(item => item === 'restart' || item === 'restartverified');
+        const interactionFailed = !report.startVerified || !report.inputVerified || !report.restartVerified ||
+            failed.some(item => ['start', 'startverified', 'input', 'inputverified', 'restart', 'restartverified'].includes(item));
         return Boolean(
             report.rendered &&
             report.bridgeDetected &&
-            report.startVerified &&
-            report.inputVerified &&
             report.hudVerified !== false &&
             report.onboardingVerified !== false &&
-            !report.restartVerified &&
-            (!failed.length || onlyRestartFailed)
+            interactionFailed
         );
     }
 
@@ -10045,7 +10043,7 @@ Lock Game Type to "Bullet Hell / Flying Shooter" and genre to "bullet-hell".`
                 if (progress && progress.workfeedHandle) {
                     updateChatWorkfeedStep(progress.workfeedHandle, 'repair_interaction', {
                         status: 'running',
-                        summary: 'Restart needs bridge stabilization. Applying runtime bridge adapter before model repair...'
+                    summary: 'Runtime controls need bridge stabilization. Applying runtime bridge adapter before model repair...'
                     });
                 }
                 const adaptedCandidate = applyRuntimeBridgeAdapterToProject(candidate, report);
@@ -10058,11 +10056,11 @@ Lock Game Type to "Bullet Hell / Flying Shooter" and genre to "bullet-hell".`
                         if (progress && progress.workfeedHandle) {
                             updateChatWorkfeedStep(progress.workfeedHandle, 'restart_test', {
                                 status: 'done',
-                                summary: 'Restart verified with runtime bridge adapter.'
+                                summary: 'Controls verified with runtime bridge adapter.'
                             });
                             updateChatWorkfeedStep(progress.workfeedHandle, 'repair_interaction', {
                                 status: 'done',
-                                summary: 'Runtime bridge adapter verified Restart without model repair.'
+                                summary: 'Runtime bridge adapter verified Start, input, and Restart without model repair.'
                             });
                             updateChatWorkfeedStep(progress.workfeedHandle, 'self_test', {
                                 status: 'done',
