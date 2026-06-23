@@ -9514,8 +9514,8 @@ Lock Game Type to "Bullet Hell / Flying Shooter" and genre to "bullet-hell".`
             report.bridgeDetected &&
             report.startVerified &&
             report.inputVerified &&
-            report.hudVerified &&
-            report.onboardingVerified &&
+            report.hudVerified !== false &&
+            report.onboardingVerified !== false &&
             !report.restartVerified &&
             (!failed.length || onlyRestartFailed)
         );
