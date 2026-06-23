@@ -8019,6 +8019,54 @@ Lock Game Type to "Bullet Hell / Flying Shooter" and genre to "bullet-hell".`
             /\u6280\u80fd\u6811|\u5b50\u5f39\u65f6\u95f4|\u6162\u52a8\u4f5c|\u8ffd\u8e2a\u5b50\u5f39|\u5206\u88c2\u5b50\u5f39/.test(String(prompt || ''));
     }
 
+    function getSpecIntentText(spec = {}, prompt = '') {
+        return [
+            prompt,
+            spec.gameType,
+            spec.coreGameplay,
+            spec.playerGoal,
+            spec.mainChallenge,
+            spec.progressionSystem,
+            spec.background,
+            spec.gameSetting
+        ].filter(Boolean).join(' ').toLowerCase();
+    }
+
+    function getFirstPlayableFallbackByIntent(spec = getCurrentGameSpec(), prompt = '') {
+        const text = getSpecIntentText(spec, prompt);
+        const titleType = spec.gameType || 'HTML5 Canvas game';
+        const art = spec.artStyle || 'readable 2D';
+        const setting = spec.gameSetting || spec.background || 'the requested world';
+        if (/\b(bullet|shooter|shoot|projectile|enemy waves?|boss|combat|survival|arena)\b/i.test(text)) {
+            return {
+                hook: `A compact ${titleType} loop focused on readable movement, challenge, and feedback.`,
+                coreLoop: 'Dodge hazards or enemy patterns, act with clear inputs, collect simple pickups, and chase score before the session ends.',
+                momentToMoment: 'Move with keyboard or pointer controls, avoid hazards, use a primary action, read the HUD, and restart quickly after failure.',
+                enemyDesign: 'Use a small readable hazard/enemy set with clear telegraphs; avoid advanced runtime-only behaviors.',
+                progressionPlan: 'Use score, timer pressure, waves or pickups for first-playable growth; defer advanced upgrade trees.',
+                prototypeScope: 'One 2D canvas arena with movement, hazards, pickups, HUD, fail state, and restart.'
+            };
+        }
+        if (/\b(puzzle|sort|sorting|match|drag|logic|tea|recipe|brew|serve|customer|management|simulation|cozy|farm|shop|order)\b/i.test(text)) {
+            return {
+                hook: `A compact ${titleType} loop in ${setting} where the player makes clear choices and sees immediate feedback.`,
+                coreLoop: 'Select, sort, match, serve, or arrange items according to the visible goal; correct actions advance progress and mistakes create readable pressure.',
+                momentToMoment: 'Use click, tap, drag, or a simple primary action to choose items, place them, confirm outcomes, read feedback, and restart cleanly.',
+                enemyDesign: 'Use non-combat challenge rules such as time pressure, limited attempts, wrong-match penalties, shifting orders, or environmental distractions.',
+                progressionPlan: 'Use rounds, score, timer, recipe/order complexity, or objective progress for first-playable growth; defer skill trees and long-term upgrades.',
+                prototypeScope: `One 2D canvas ${art} puzzle/management loop with visible goal, controls, feedback, HUD, completion/fail state, and restart.`
+            };
+        }
+        return {
+            hook: `A compact ${titleType} loop focused on the confirmed player goal and readable feedback.`,
+            coreLoop: 'Act on the visible objective, receive immediate feedback, advance progress, and restart cleanly.',
+            momentToMoment: 'Make short-cycle decisions with clear visual feedback, HUD/objective updates, and a simple next action.',
+            enemyDesign: 'Use the confirmed challenge as readable pressure without adding unrelated combat or advanced systems.',
+            progressionPlan: 'Use score, timer, rounds, objective progress, or simple unlock pacing for first-playable growth.',
+            prototypeScope: 'Build one compact playable 2D canvas loop with start, input, feedback, completion/fail state, and restart.'
+        };
+    }
+
     function planContainsImplicitAdvancedRuntime(plan = {}) {
         const text = [
             plan.coreLoop,
@@ -8033,15 +8081,16 @@ Lock Game Type to "Bullet Hell / Flying Shooter" and genre to "bullet-hell".`
 
     function constrainGamePlanToFirstPlayable(plan = {}, spec = getCurrentGameSpec(), prompt = '') {
         if (!plan || hasExplicitAdvancedRuntimePromptEvidence(prompt) || !planContainsImplicitAdvancedRuntime(plan)) return plan;
+        const fallback = getFirstPlayableFallbackByIntent(spec, prompt);
         return {
             ...plan,
-            hook: plan.hook || `A compact ${spec.gameType || 'arcade'} loop focused on readable movement, challenge, and feedback.`,
-            coreLoop: 'Dodge enemy patterns, shoot or avoid threats, collect simple pickups, survive waves, and chase score before the timer ends.',
-            momentToMoment: 'Move with keyboard controls, avoid projectiles, line up attacks, collect pickups, read the HUD, and restart quickly after failure.',
-            enemyDesign: 'Use a small enemy set with straight, aimed, or ring projectile patterns; keep telegraphs readable and avoid new runtime-only behaviors.',
-            progressionPlan: 'Use score, timer pressure, wave pacing, and collectible pickups for first-playable growth; defer advanced upgrade systems.',
-            prototypeScope: 'One 2D canvas arena with movement, shooting or dodging, enemy waves, pickups, timer/score HUD, fail state, and restart.',
-            risk: 'Advanced runtime mechanics from the expanded concept were deferred so automatic template compile can produce an honest first playable.'
+            hook: plan.hook || fallback.hook,
+            coreLoop: fallback.coreLoop,
+            momentToMoment: fallback.momentToMoment,
+            enemyDesign: fallback.enemyDesign,
+            progressionPlan: fallback.progressionPlan,
+            prototypeScope: fallback.prototypeScope,
+            risk: 'Advanced runtime mechanics from the expanded concept were deferred so AI Direct can produce an honest finished first playable without changing the requested genre.'
         };
     }
 
@@ -10254,6 +10303,9 @@ Lock Game Type to "Bullet Hell / Flying Shooter" and genre to "bullet-hell".`
             buildGenerationCompletionReceiptForTest(plan = {}, durationMs = 0) {
                 return buildGenerationCompletionReceipt(plan, durationMs);
             },
+            constrainGamePlanToFirstPlayableForTest(plan = {}, spec = {}, prompt = '') {
+                return constrainGamePlanToFirstPlayable(plan, spec, prompt);
+            },
             buildWorkspaceBuildSummaryForTest(project = {}) {
                 return buildWorkspaceBuildSummaryHtml(project);
             },
@@ -11652,7 +11704,7 @@ canvas, svg, video, img {
         workspace.querySelectorAll('[data-workspace-source-evidence]').forEach(node => {
             node.textContent = sourceEvidence;
         });
-        syncWorkspacePreviewStageSize(workspace);
+        if (frame) window.setTimeout(() => fitIframeContent(frame), 120);
         refreshWorkspaceCodePanel(workspace, plan);
         if (container) {
             container.__gameEditRuntime = container.__gameEditRuntime || {};
@@ -16168,8 +16220,9 @@ console.log('Droi generated game:', GAME_TITLE);`
 
     let activeGameEditSubmitCleanup = null;
     let activePreviewStageSyncCleanup = null;
+    let activeWorkspaceComposerSyncCleanup = null;
 
-    function syncWorkspacePreviewStageSize(workspace) {
+    function fitPreviewShell(workspace) {
         if (!workspace || !workspace.isConnected) return;
         const column = workspace.querySelector('.preview-play-column');
         if (!column) return;
@@ -16192,19 +16245,50 @@ console.log('Droi generated game:', GAME_TITLE);`
         });
     }
 
+    function syncWorkspacePreviewStageSize(workspace) {
+        fitPreviewShell(workspace);
+    }
+
+    function fitIframeContent(frame) {
+        return applyPreviewFrameContentFit(frame);
+    }
+
+    function syncWorkspaceComposerInset(workspace) {
+        if (!workspace || !workspace.isConnected) return;
+        const inputArea = document.querySelector('.chat-input-wrapper');
+        const panel = workspace.querySelector('[data-preview-chat-panel]');
+        if (!inputArea || !panel) return;
+        const rect = inputArea.getBoundingClientRect();
+        const inset = Math.max(132, Math.ceil(rect.height || 0) + 34);
+        workspace.style.setProperty('--workspace-composer-inset', `${inset}px`);
+        panel.style.setProperty('--workspace-composer-inset', `${inset}px`);
+    }
+
     function initGameEditWorkspace(container, plan) {
         const workspace = container.querySelector('[data-game-workspace]');
         if (!workspace) return;
         document.body.classList.add('game-edit-workspace-active');
         if (activePreviewStageSyncCleanup) activePreviewStageSyncCleanup();
         const syncPreviewStageSoon = () => {
-            syncWorkspacePreviewStageSize(workspace);
-            window.requestAnimationFrame(() => syncWorkspacePreviewStageSize(workspace));
+            fitPreviewShell(workspace);
+            window.requestAnimationFrame(() => fitPreviewShell(workspace));
         };
         syncPreviewStageSoon();
         window.addEventListener('resize', syncPreviewStageSoon);
         activePreviewStageSyncCleanup = () => {
             window.removeEventListener('resize', syncPreviewStageSoon);
+        };
+        if (activeWorkspaceComposerSyncCleanup) activeWorkspaceComposerSyncCleanup();
+        const syncComposerSoon = () => {
+            syncWorkspaceComposerInset(workspace);
+            window.requestAnimationFrame(() => syncWorkspaceComposerInset(workspace));
+        };
+        syncComposerSoon();
+        window.addEventListener('resize', syncComposerSoon);
+        if (chatInputField) chatInputField.addEventListener('input', syncComposerSoon);
+        activeWorkspaceComposerSyncCleanup = () => {
+            window.removeEventListener('resize', syncComposerSoon);
+            if (chatInputField) chatInputField.removeEventListener('input', syncComposerSoon);
         };
         const historySidebar = workspace.querySelector('.change-history-sidebar');
         const editSidebar = workspace.querySelector('.game-edit-sidebar');
@@ -16436,6 +16520,10 @@ console.log('Droi generated game:', GAME_TITLE);`
                 if (activePreviewStageSyncCleanup) {
                     activePreviewStageSyncCleanup();
                     activePreviewStageSyncCleanup = null;
+                }
+                if (activeWorkspaceComposerSyncCleanup) {
+                    activeWorkspaceComposerSyncCleanup();
+                    activeWorkspaceComposerSyncCleanup = null;
                 }
                 resetChat();
             });
