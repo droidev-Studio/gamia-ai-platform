@@ -5925,7 +5925,8 @@ Treat genre conventions as suggested, not confirmed, unless the user explicitly 
     }
 
     function isSoftPipelineStage(stageId = '') {
-        return normalizePipelineStageId(stageId) === 'gameplay_fit';
+        const normalized = normalizePipelineStageId(stageId);
+        return normalized === 'gameplay_fit' || normalized === 'art_ui_apply' || normalized === 'project_meta';
     }
 
     function syncGenerationPipelineWorkfeed(handle, project = {}) {
@@ -6021,6 +6022,35 @@ Treat genre conventions as suggested, not confirmed, unless the user explicitly 
     function failGenerationWorkfeed(handle, error = {}, fallbackSummary = 'AI direct generation failed.') {
         const summary = (error && (error.message || error.title || error.technicalMessage)) || fallbackSummary;
         return failChatWorkfeed(handle, getGenerationFailureWorkfeedStep(error), summary);
+    }
+
+    function getRunningChatWorkfeedStepId(handle) {
+        const steps = handle && handle.job && Array.isArray(handle.job.steps) ? handle.job.steps : [];
+        const running = steps.find(step => step.status === 'running');
+        return running && running.id || '';
+    }
+
+    function startGenerationStallHint(handle, cancelToken = null) {
+        if (!handle || !handle.job) return () => {};
+        let lastHintAt = 0;
+        handle.job.meta = {
+            ...(handle.job.meta || {}),
+            lastProgressAt: Date.now()
+        };
+        const timer = setInterval(() => {
+            if (!handle.job || handle.job.status !== 'running' || cancelToken?.cancelled) return;
+            const lastProgressAt = Number(handle.job.meta && handle.job.meta.lastProgressAt || handle.job.startedAt || Date.now());
+            const now = Date.now();
+            if (now - lastProgressAt < 70000 || now - lastHintAt < 45000) return;
+            const stepId = getRunningChatWorkfeedStepId(handle);
+            if (!stepId) return;
+            lastHintAt = now;
+            updateChatWorkfeedStep(handle, stepId, {
+                status: 'running',
+                summary: 'Still working with the selected model. Some AI stages can take a few minutes; Core will be used if polish cannot finish.'
+            });
+        }, 15000);
+        return () => clearInterval(timer);
     }
 
     function cancelChatWorkfeed(handle, summary = 'Generation canceled.') {
@@ -6180,11 +6210,34 @@ Treat genre conventions as suggested, not confirmed, unless the user explicitly 
         const finishedPlayableReady = project.finishedPlayableReady ?? report.finishedPlayableReady;
 
         if (deliveryTier === 'core') {
+            if (!interactiveStatus.ok) {
+                return {
+                    ok: false,
+                    reason: 'self_test_incomplete',
+                    title: 'Playable self-test needs recovery',
+                    message: interactiveStatus.missing && interactiveStatus.missing.length
+                        ? `The core game rendered, but controls and restart could not be verified yet. Missing report fields: ${interactiveStatus.missing.join(', ')}.`
+                        : 'The core game rendered, but controls and restart could not be verified yet.',
+                    deliveryTier,
+                    skippedStages,
+                    missingReportFields: interactiveStatus.missing || []
+                };
+            }
+            if (!hasPreview || !hasIndex || !hasReport) {
+                return {
+                    ok: false,
+                    reason: 'workspace_contract_incomplete',
+                    title: 'Workspace package needs recovery',
+                    message: 'The generated core game is missing files required for the workspace.',
+                    deliveryTier,
+                    skippedStages
+                };
+            }
             return {
-                ok: false,
-                reason: 'core_only',
+                ok: true,
+                reason: 'core_playable_partial_ready',
                 title: 'Playable core ready',
-                message: 'Playable core ready, art/UI generation still needs recovery.',
+                message: 'Playable version ready. Some polish steps did not finish.',
                 deliveryTier,
                 skippedStages
             };
@@ -10620,6 +10673,12 @@ Lock Game Type to "Bullet Hell / Flying Shooter" and genre to "bullet-hell".`
     function applyAIDirectStreamEventToWorkfeed(event, progress = null) {
         const handle = progress && progress.workfeedHandle;
         if (!handle || !event) return;
+        if (handle.job) {
+            handle.job.meta = {
+                ...(handle.job.meta || {}),
+                lastProgressAt: Date.now()
+            };
+        }
         if (event.type === 'attempt_started') {
             resetGenerationPipelineWorkfeedForAttempt(handle, event);
             return;
@@ -10636,7 +10695,7 @@ Lock Game Type to "Bullet Hell / Flying Shooter" and genre to "bullet-hell".`
         if (!stageId) return;
         const type = String(event.type || '');
         const stageStatus = String(stage.status || '').toLowerCase();
-        const status = type === 'stage_started'
+        const status = type === 'stage_started' || type === 'stage_heartbeat' || type === 'heartbeat'
             ? 'running'
             : type === 'stage_skipped'
                 ? 'skipped'
@@ -10648,9 +10707,9 @@ Lock Game Type to "Bullet Hell / Flying Shooter" and genre to "bullet-hell".`
         updateChatWorkfeedStep(handle, stageId, {
             status,
             summary: stage.summary || (status === 'running'
-                ? 'Working...'
+                ? (type === 'stage_heartbeat' || type === 'heartbeat' ? 'Still working with the selected model. You can keep waiting or cancel.' : 'Working...')
                 : status === 'skipped'
-                    ? (isArtUiPipelineStage(stageId) ? 'Art/UI resources need recovery before final delivery.' : 'Advanced polish step skipped. Using latest verified playable version.')
+                    ? (isArtUiPipelineStage(stageId) ? 'Polish step skipped. Using verified playable core.' : 'Advanced polish step skipped. Using latest verified playable version.')
                     : 'Completed.')
         });
     }
@@ -20365,6 +20424,7 @@ HTML5 Constraints: Canvas, playable, responsive, no external dependencies, singl
         activeGenerationCancelToken = cancelToken;
         clearActiveGenerationWorkfeedForNewAttempt();
         let generationWorkfeed = null;
+        let stopGenerationStallHint = () => {};
         try {
             progress.start(t('progressAuto'));
             generationWorkfeed = createChatWorkfeed({
@@ -20387,6 +20447,7 @@ HTML5 Constraints: Canvas, playable, responsive, no external dependencies, singl
                 }
             });
             activeGenerationWorkfeed = generationWorkfeed;
+            stopGenerationStallHint = startGenerationStallHint(generationWorkfeed, cancelToken);
             scrollGenerationProgressIntoView();
             progress.workfeedHandle = generationWorkfeed;
             progress.cancelToken = cancelToken;
@@ -20397,6 +20458,7 @@ HTML5 Constraints: Canvas, playable, responsive, no external dependencies, singl
             assertGenerationNotCancelled(cancelToken);
             const finishedGate = getFinishedPlayableGateStatus(plan.generatedProject || {});
             if (!finishedGate.ok) {
+                stopGenerationStallHint();
                 if (progressContainer) progressContainer.style.display = 'none';
                 chatHistory.classList.remove('is-generating');
                 const inputArea = document.querySelector('.chat-input-wrapper');
@@ -20444,8 +20506,9 @@ HTML5 Constraints: Canvas, playable, responsive, no external dependencies, singl
                 return;
             }
             const tDone = setTimeout(() => {
-                if (cancelToken.cancelled) return;
-                if (progressContainer) progressContainer.style.display = 'none';
+                    if (cancelToken.cancelled) return;
+                    stopGenerationStallHint();
+                    if (progressContainer) progressContainer.style.display = 'none';
                 showAutoGenerationResult(plan, {
                     onMounted: () => {
                         updateChatWorkfeedStep(generationWorkfeed, 'preview', {
@@ -20467,6 +20530,7 @@ HTML5 Constraints: Canvas, playable, responsive, no external dependencies, singl
             generationTimeouts.push(tDone);
         } catch (error) {
             if (isGenerationCancelled(error) || cancelToken.cancelled) {
+                stopGenerationStallHint();
                 cancelChatWorkfeed(generationWorkfeed, 'Generation canceled before the workspace was created.');
                 if (progressContainer) progressContainer.style.display = 'none';
                 chatHistory.classList.remove('is-generating');
@@ -20476,6 +20540,7 @@ HTML5 Constraints: Canvas, playable, responsive, no external dependencies, singl
                 return;
             }
             const classified = progress.fail(error);
+            stopGenerationStallHint();
             failGenerationWorkfeed(generationWorkfeed, error && error.code ? error : classified, classified.message || classified.title || 'AI direct generation failed.');
             const tFail = setTimeout(() => {
                 if (progressContainer) progressContainer.style.display = 'none';
@@ -20489,6 +20554,9 @@ HTML5 Constraints: Canvas, playable, responsive, no external dependencies, singl
             }, 300);
             generationTimeouts.push(tFail);
         } finally {
+            if (generationWorkfeed && generationWorkfeed.job && generationWorkfeed.job.status !== 'running') {
+                stopGenerationStallHint();
+            }
             if (activeGenerationCancelToken === cancelToken && !cancelToken.cancelled) activeGenerationCancelToken = null;
         }
     }
