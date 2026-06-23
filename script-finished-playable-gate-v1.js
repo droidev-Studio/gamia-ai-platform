@@ -9709,6 +9709,21 @@ Lock Game Type to "Bullet Hell / Flying Shooter" and genre to "bullet-hell".`
         return `\n<script data-gamia-runtime-bridge-adapter="${GAMIA_RUNTIME_BRIDGE_ADAPTER_MARKER}">\n(function(){\n  if (window.__GAMIA_RUNTIME_BRIDGE_ADAPTER_V1__) return;\n  window.__GAMIA_RUNTIME_BRIDGE_ADAPTER_V1__ = true;\n  var original = window.__GAMIA_GAME__ && typeof window.__GAMIA_GAME__ === 'object' ? window.__GAMIA_GAME__ : {};\n  var bridgeState = { status: 'idle', tick: 0, startCount: 0, inputCount: 0, restartCount: 0, lastAction: 'adapter-installed' };\n  function safeCall(method, args){\n    try { return typeof original[method] === 'function' ? original[method].apply(original, args || []) : undefined; } catch (error) { return undefined; }\n  }\n  function visible(el){\n    if (!el || !el.getBoundingClientRect) return false;\n    var rect = el.getBoundingClientRect();\n    var style = window.getComputedStyle ? window.getComputedStyle(el) : null;\n    return rect.width > 0 && rect.height > 0 && (!style || (style.visibility !== 'hidden' && style.display !== 'none'));\n  }\n  function clickText(pattern){\n    var nodes = Array.prototype.slice.call(document.querySelectorAll('button,[role=\"button\"],a,input[type=\"button\"],input[type=\"submit\"]'));\n    var target = nodes.find(function(el){ return visible(el) && pattern.test((el.textContent || el.value || el.getAttribute('aria-label') || el.title || '').trim()); });\n    if (!target) return false;\n    try { target.click(); return true; } catch (error) { return false; }\n  }\n  function canvasEvent(type, extra){\n    var canvas = document.querySelector('canvas');\n    if (!canvas) return false;\n    var rect = canvas.getBoundingClientRect();\n    var init = Object.assign({ bubbles: true, cancelable: true, clientX: rect.left + rect.width / 2, clientY: rect.top + rect.height / 2 }, extra || {});\n    try { canvas.dispatchEvent(new MouseEvent(type, init)); return true; } catch (error) { return false; }\n  }\n  function keyEvent(key, code){\n    var init = { key: key, code: code || key, bubbles: true, cancelable: true };\n    try {\n      window.dispatchEvent(new KeyboardEvent('keydown', init));\n      document.dispatchEvent(new KeyboardEvent('keydown', init));\n      var canvas = document.querySelector('canvas');\n      if (canvas) canvas.dispatchEvent(new KeyboardEvent('keydown', init));\n      window.dispatchEvent(new KeyboardEvent('keyup', init));\n      return true;\n    } catch (error) { return false; }\n  }\n  function sourceState(){\n    var state = safeCall('getState', []);\n    return state && typeof state === 'object' ? state : {};\n  }\n  function mergedState(){\n    var base = sourceState();\n    var signals = Object.assign({}, base.signals && typeof base.signals === 'object' ? base.signals : {}, {\n      bridgeTick: bridgeState.tick,\n      startCount: bridgeState.startCount,\n      inputCount: bridgeState.inputCount,\n      restartCount: bridgeState.restartCount,\n      lastAction: bridgeState.lastAction\n    });\n    var capabilities = Object.assign({}, base.capabilities && typeof base.capabilities === 'object' ? base.capabilities : {}, {\n      hasObjective: true,\n      hasCustomSignal: true,\n      hasRuntimeBridgeAdapter: true\n    });\n    return Object.assign({}, base, {\n      version: 'gamia-game-runtime-v1',\n      status: base.status || bridgeState.status,\n      tick: Math.max(Number(base.tick) || 0, bridgeState.tick),\n      canInteract: base.canInteract !== false,\n      signals: signals,\n      capabilities: capabilities\n    });\n  }\n  function bump(action, status){\n    bridgeState.tick += 1;\n    bridgeState.lastAction = action;\n    if (status) bridgeState.status = status;\n  }\n  window.__GAMIA_GAME__ = {\n    version: 'gamia-game-runtime-v1',\n    start: function(){\n      bridgeState.startCount += 1; bump('start', 'running');\n      safeCall('start', []); clickText(/start|begin|play|brew|serve|launch|go/i); keyEvent('Enter', 'Enter'); keyEvent(' ', 'Space'); canvasEvent('pointerdown'); canvasEvent('click');\n      return mergedState();\n    },\n    restart: function(){\n      bridgeState.restartCount += 1; bump('restart', 'idle');\n      safeCall('restart', []); clickText(/restart|reset|again|retry|replay/i); keyEvent('r', 'KeyR');\n      return mergedState();\n    },\n    pause: function(){ bump('pause', 'paused'); safeCall('pause', []); keyEvent('p', 'KeyP'); return mergedState(); },\n    resume: function(){ bump('resume', 'running'); safeCall('resume', []); keyEvent('p', 'KeyP'); return mergedState(); },\n    dispatchInput: function(input){\n      bridgeState.inputCount += 1; bump('input', 'running');\n      safeCall('dispatchInput', [input || {}]);\n      var key = (input && (input.key || input.code)) || 'ArrowRight';\n      var code = (input && input.code) || key;\n      keyEvent(key, code); canvasEvent('pointermove'); canvasEvent('click');\n      return mergedState();\n    },\n    getState: mergedState\n  };\n})();\n</script>\n`;
     }
 
+    const GAMIA_SELF_TEST_ERROR_CAPTURE_MARKER = 'gamia-self-test-error-capture-v1';
+
+    function buildSelfTestErrorCaptureScript() {
+        return `<script data-gamia-self-test-error-capture="${GAMIA_SELF_TEST_ERROR_CAPTURE_MARKER}">(function(){try{if(window.__GAMIA_SELF_TEST_ERROR_CAPTURE_V1__)return;window.__GAMIA_SELF_TEST_ERROR_CAPTURE_V1__=true;window.__GAMIA_EARLY_RUNTIME_ERRORS__=[];function push(value){try{var message=value&&value.message?value.message:String(value||'runtime error');window.__GAMIA_EARLY_RUNTIME_ERRORS__.push(message.slice(0,500));}catch(_){}}window.addEventListener('error',function(event){push(event&&event.error?event.error:event&&event.message);},true);window.addEventListener('unhandledrejection',function(event){push(event&&event.reason?event.reason:'promise rejection');},true);}catch(_){}})();</script>`;
+    }
+
+    function instrumentHtmlForSelfTest(html = '') {
+        const source = String(html || '');
+        if (!source || source.includes(GAMIA_SELF_TEST_ERROR_CAPTURE_MARKER)) return source;
+        const capture = buildSelfTestErrorCaptureScript();
+        if (/<head[^>]*>/i.test(source)) return source.replace(/<head[^>]*>/i, match => `${match}\n${capture}`);
+        if (/<html[^>]*>/i.test(source)) return source.replace(/<html[^>]*>/i, match => `${match}\n${capture}`);
+        return `${capture}\n${source}`;
+    }
+
     function injectRuntimeBridgeAdapterIntoHtml(html = '') {
         const source = String(html || '');
         if (!source || source.includes(GAMIA_RUNTIME_BRIDGE_ADAPTER_MARKER)) return source;
@@ -9794,6 +9809,7 @@ Lock Game Type to "Bullet Hell / Flying Shooter" and genre to "bullet-hell".`
             report.fatalErrors.push('index.html missing or failed runnable validation');
             return buildInteractiveReportPatch(report);
         }
+        const selfTestHtml = instrumentHtmlForSelfTest(html);
         const iframe = document.createElement('iframe');
         iframe.setAttribute('title', 'Gamia interactive self-test');
         applyGeneratedPreviewFrameSecurity(iframe);
@@ -9806,7 +9822,7 @@ Lock Game Type to "Bullet Hell / Flying Shooter" and genre to "bullet-hell".`
             }, { once: true });
         });
         document.body.appendChild(iframe);
-        iframe.srcdoc = html;
+        iframe.srcdoc = selfTestHtml;
         await Promise.race([loadPromise, waitForMs(options.loadTimeoutMs || 3500)]);
         if (!loadResolved) report.fatalErrors.push('preview iframe did not finish loading');
         try {
@@ -9823,6 +9839,16 @@ Lock Game Type to "Bullet Hell / Flying Shooter" and genre to "bullet-hell".`
                 report.fatalErrors.push((event.reason && (event.reason.message || String(event.reason))) || 'iframe promise rejection');
             });
             await waitForMs(250);
+            const collectEarlyRuntimeErrors = () => {
+                const earlyErrors = Array.isArray(win.__GAMIA_EARLY_RUNTIME_ERRORS__)
+                    ? win.__GAMIA_EARLY_RUNTIME_ERRORS__
+                    : [];
+                earlyErrors.forEach(message => {
+                    const text = String(message || 'iframe runtime error').slice(0, 500);
+                    if (text && !report.fatalErrors.includes(text)) report.fatalErrors.push(text);
+                });
+            };
+            collectEarlyRuntimeErrors();
             const initialCanvas = canvasHashFromDocument(doc);
             const visibleText = getDocumentReadableText(doc);
             const hasCanvasElement = Boolean(doc.querySelector('canvas'));
@@ -9936,6 +9962,7 @@ Lock Game Type to "Bullet Hell / Flying Shooter" and genre to "bullet-hell".`
             rememberBridgeTimeout(afterRestartStateRaw);
             const afterRestartState = normalizeInteractiveState(afterRestartStateRaw);
             const afterRestartCanvas = canvasHashFromDocument(doc);
+            collectEarlyRuntimeErrors();
             const restartDiff = getInteractiveStateDiff(afterInputState, afterRestartState);
             const restartChanged = restartDiff.length > 0 || afterInputCanvas.hash !== afterRestartCanvas.hash;
             const restartReady = ['idle', 'running'].includes(afterRestartState.status) && afterRestartState.canInteract !== false;
