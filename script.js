@@ -6353,6 +6353,13 @@ Treat genre conventions as suggested, not confirmed, unless the user explicitly 
         };
     }
 
+    function isProjectFinishedDeliveryReady(project = {}) {
+        const gate = getFinishedPlayableGateStatus(project);
+        const tier = String(gate.deliveryTier || getProjectDeliveryTier(project) || '').toLowerCase();
+        const draftTier = tier === 'core' || tier === 'off_direction_draft' || tier === 'draft' || tier === 'playable_draft';
+        return Boolean(gate.ok && !draftTier && project.__viewingPlayableDraft !== true);
+    }
+
     function showFinishedPlayableRecoveryCard(plan, gate = {}, handlers = {}) {
         const project = plan && plan.generatedProject || {};
         const skippedLabels = (gate.skippedStages || getProjectSkippedStages(project))
@@ -6539,7 +6546,7 @@ Treat genre conventions as suggested, not confirmed, unless the user explicitly 
             nextActions: [
                 { id: 'preview', label: 'Preview', primary: true },
                 { id: 'edit', label: 'Keep editing' },
-                { id: 'save_zip', label: 'Save ZIP' }
+                ...(isProjectFinishedDeliveryReady(project) ? [{ id: 'save_zip', label: 'Save ZIP' }] : [])
             ],
             details: {
                 modelMeta,
@@ -10788,6 +10795,73 @@ Lock Game Type to "Bullet Hell / Flying Shooter" and genre to "bullet-hell".`
                     publishDisabled: publishButton ? publishButton.disabled : null,
                     publishTitle: publishButton ? publishButton.title : ''
                 };
+            },
+            setWorkspaceDeliveryReportForTest(patch = {}) {
+                const workspace = document.querySelector('[data-game-workspace]');
+                if (!workspace || !workspace.__plan || !workspace.__plan.generatedProject) {
+                    return { ok: false, reason: 'workspace_missing' };
+                }
+                const project = workspace.__plan.generatedProject;
+                const reportPatch = patch.generationReport || {};
+                project.deliveryTier = patch.deliveryTier || project.deliveryTier;
+                project.__viewingPlayableDraft = patch.viewingPlayableDraft === true;
+                project.generationReport = {
+                    ...(project.generationReport || {}),
+                    ...reportPatch
+                };
+                [
+                    'artUiApplied',
+                    'finishedPlayableReady',
+                    'artResourceDecision',
+                    'uiSkinDecision',
+                    'assetManifest',
+                    'visualStyleReport',
+                    'demandFidelityReport'
+                ].forEach(key => {
+                    if (Object.prototype.hasOwnProperty.call(reportPatch, key)) project[key] = reportPatch[key];
+                });
+                if (patch.projectMeta && typeof patch.projectMeta === 'object') {
+                    project.projectMeta = { ...(project.projectMeta || {}), ...patch.projectMeta };
+                    project.generationReport.projectMeta = { ...(project.generationReport.projectMeta || {}), ...project.projectMeta };
+                    if (!Array.isArray(project.codeFiles)) project.codeFiles = [];
+                    const metaIndex = project.codeFiles.findIndex(file => String(file.path || file.name || '').replace(/\\/g, '/').toLowerCase() === 'project-meta.json');
+                    const metaFile = {
+                        path: 'project-meta.json',
+                        content: JSON.stringify(project.projectMeta, null, 2),
+                        language: 'json',
+                        kind: 'projectMeta'
+                    };
+                    if (metaIndex >= 0) project.codeFiles[metaIndex] = { ...project.codeFiles[metaIndex], ...metaFile };
+                    else project.codeFiles.push(metaFile);
+                }
+                workspace.dataset.previewStatus = patch.previewStatus || workspace.dataset.previewStatus || 'verified';
+                workspace.dispatchEvent(new CustomEvent('workspace-preview-status-change', {
+                    bubbles: true,
+                    detail: { status: workspace.dataset.previewStatus }
+                }));
+                const publishButton = workspace.querySelector('[data-workspace-publish]');
+                return {
+                    ok: true,
+                    deliveryTier: project.deliveryTier,
+                    publishDisabled: publishButton ? publishButton.disabled : null,
+                    publishTitle: publishButton ? publishButton.title : '',
+                    finishedReady: isProjectFinishedDeliveryReady(project)
+                };
+            },
+            attemptWorkspaceZipForTest() {
+                const workspace = document.querySelector('[data-game-workspace]');
+                if (!workspace || !workspace.__plan) return { ok: false, reason: 'workspace_missing' };
+                const state = getWorkspaceState(workspace);
+                const beforeHistoryCount = Array.isArray(state.historyRecords) ? state.historyRecords.length : 0;
+                saveWorkspaceZip(workspace, workspace.__plan);
+                const afterHistoryCount = Array.isArray(state.historyRecords) ? state.historyRecords.length : 0;
+                const status = workspace.querySelector('[data-workspace-save-status]');
+                return {
+                    ok: true,
+                    beforeHistoryCount,
+                    afterHistoryCount,
+                    statusText: status ? status.textContent : ''
+                };
             }
         };
     }
@@ -14529,6 +14603,17 @@ console.log('Droi generated game:', GAME_TITLE);`
         const status = workspace.querySelector('[data-workspace-save-status]');
         const button = workspace.querySelector('[data-workspace-save]');
         const generated = plan && plan.generatedSpec ? plan.generatedSpec : null;
+        const project = plan && plan.generatedProject ? plan.generatedProject : {};
+        if (!isProjectFinishedDeliveryReady(project)) {
+            if (status) status.textContent = 'ZIP disabled for playable drafts';
+            addWorkspaceSystemNotice(
+                workspace,
+                'Export blocked',
+                'Playable drafts are not exported as ZIP files. Retry or refine direction until the project passes finished delivery gates.',
+                'Export'
+            );
+            return;
+        }
         const state = getWorkspaceState(workspace);
         state.exportState = {
             exportId: localWorkspaceId(`export-${Date.now()}`),
@@ -17031,11 +17116,13 @@ console.log('Droi generated game:', GAME_TITLE);`
             const project = plan && plan.generatedProject ? plan.generatedProject : {};
             const previewReady = workspace.dataset.previewStatus === 'verified'
                 && isProjectInteractiveVerified(project);
+            const finishedReady = isProjectFinishedDeliveryReady(project);
             return [
                 { id: 'title', label: 'Project name', ok: Boolean(String(meta.title || meta.projectName || '').trim()) },
                 { id: 'description', label: 'English description', ok: Boolean(String(meta.description || meta.englishDescription || '').trim()) },
                 { id: 'cover', label: 'Preview image or cover', ok: coverReady },
-                { id: 'preview', label: 'Playable game verified', ok: previewReady }
+                { id: 'preview', label: 'Playable game verified', ok: previewReady },
+                { id: 'finished_delivery', label: 'Finished delivery gate', ok: finishedReady }
             ];
         }
 
@@ -19849,6 +19936,19 @@ HTML5 Constraints: Canvas, playable, responsive, no external dependencies, singl
                 { path: 'index.html', content: demoHtml, language: 'html', kind: 'runtime' },
                 { path: 'spec/game.json', content: JSON.stringify(generatedSpec, null, 2), language: 'json', kind: 'spec' },
                 {
+                    path: 'project-meta.json',
+                    content: JSON.stringify({
+                        ready: true,
+                        title: 'Bloom Drift',
+                        projectName: 'Bloom Drift',
+                        description: spec.background,
+                        englishDescription: spec.background,
+                        coverImage: { url: '', status: 'preview_screenshot_pending' }
+                    }, null, 2),
+                    language: 'json',
+                    kind: 'projectMeta'
+                },
+                {
                     path: 'assets/manifest.json',
                     content: JSON.stringify({ generatedAt: new Date().toISOString(), assets: [], style: spec.artStyle }, null, 2),
                     language: 'json',
@@ -19857,6 +19957,49 @@ HTML5 Constraints: Canvas, playable, responsive, no external dependencies, singl
             ],
             generationReport: {
                 summary: 'Deterministic local demo project for PC generated workspace validation.',
+                deliveryTier: 'enhanced',
+                partialEnhancement: false,
+                finishedPlayableReady: true,
+                artUiApplied: true,
+                interactiveReport,
+                deliveryReady: true,
+                qualityTier: 'playable',
+                playableVerifiedAt: interactiveReport.testedAt,
+                projectMeta: {
+                    ready: true,
+                    title: 'Bloom Drift',
+                    projectName: 'Bloom Drift',
+                    description: spec.background,
+                    englishDescription: spec.background,
+                    coverImage: { url: '', status: 'preview_screenshot_pending' }
+                },
+                artResourceDecision: {
+                    assetSource: 'generated_canvas_style',
+                    selectedResourceId: 'workspace-demo-canvas-style',
+                    requestedStyle: spec.artStyle
+                },
+                uiSkinDecision: {
+                    assetSource: 'generated_canvas_style',
+                    selectedSkinId: 'workspace-demo-ui-skin',
+                    requestedStyle: spec.artStyle
+                },
+                assetManifest: {
+                    assetSource: 'generated_canvas_style',
+                    externalAssets: []
+                },
+                visualStyleReport: {
+                    applied: true,
+                    assetSource: 'generated_canvas_style',
+                    canvasVisualTreatment: true,
+                    verifiedFrom: 'debug_workspace_demo'
+                },
+                pipelineStages: [
+                    { id: 'core_playable', label: 'Designing playable core', status: 'done', summary: 'Demo playable core ready.' },
+                    { id: 'art_ui_apply', label: 'Applying art and UI resources', status: 'done', summary: 'Demo art/UI ready.' },
+                    { id: 'gameplay_fit', label: 'Fitting gameplay to request', status: 'done', summary: 'Demo gameplay fit ready.' },
+                    { id: 'project_meta', label: 'Preparing project title and preview', status: 'done', summary: 'Demo project metadata ready.' },
+                    { id: 'final_self_test', label: 'Testing controls and restart', status: 'done', summary: 'Demo interactive self-test passed.', evidence: interactiveReport }
+                ],
                 runtimeArchitecture: {
                     coreLocked: true,
                     moduleRoot: 'runtime/modules',
