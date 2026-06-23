@@ -10095,6 +10095,84 @@ Lock Game Type to "Bullet Hell / Flying Shooter" and genre to "bullet-hell".`
         return error;
     }
 
+    function buildCorePlayableFallbackProject(project = {}, failedReport = null) {
+        const report = project.generationReport || {};
+        const snapshotPath = report.corePlayableSnapshot && report.corePlayableSnapshot.filePath || 'internal/core-playable/index.html';
+        const codeFiles = Array.isArray(project.codeFiles) ? project.codeFiles : [];
+        const snapshotFile = codeFiles.find(file => String(file.path || '') === snapshotPath);
+        if (!snapshotFile || !snapshotFile.content) return null;
+        const nextReport = {
+            ...report,
+            deliveryTier: 'core',
+            partialEnhancement: true,
+            finishedPlayableReady: true,
+            artUiApplied: false,
+            enhancedInteractiveReport: failedReport || report.interactiveReport || null,
+            skippedStages: [
+                ...(Array.isArray(report.skippedStages) ? report.skippedStages : []),
+                {
+                    id: 'enhanced_self_test',
+                    label: 'Enhanced playable self-test',
+                    reason: 'interactive_self_test_failed',
+                    message: 'Enhanced polish did not pass playable self-test. Using verified Core Playable.'
+                }
+            ],
+            workspaceNotice: 'Playable version ready. Enhanced polish did not pass self-test, so Droi AI used the verified Core Playable.',
+            sourceTrace: {
+                ...(report.sourceTrace || {}),
+                fallback: 'core_playable_after_enhanced_self_test_failure'
+            }
+        };
+        const primaryFiles = codeFiles
+            .filter(file => String(file.path || '') !== snapshotPath)
+            .map(file => {
+                if (String(file.path || '').toLowerCase() === 'index.html') {
+                    return {
+                        ...file,
+                        content: snapshotFile.content,
+                        kind: 'corePlayableFallback'
+                    };
+                }
+                if (String(file.path || '').toLowerCase() === 'generation-report.json') {
+                    return {
+                        ...file,
+                        content: JSON.stringify(nextReport, null, 2),
+                        language: 'json',
+                        kind: 'report'
+                    };
+                }
+                return file;
+            });
+        if (!primaryFiles.some(file => String(file.path || '').toLowerCase() === 'index.html')) {
+            primaryFiles.unshift({
+                path: 'index.html',
+                content: snapshotFile.content,
+                language: 'html',
+                kind: 'corePlayableFallback'
+            });
+        }
+        if (!primaryFiles.some(file => String(file.path || '').toLowerCase() === 'generation-report.json')) {
+            primaryFiles.push({
+                path: 'generation-report.json',
+                content: JSON.stringify(nextReport, null, 2),
+                language: 'json',
+                kind: 'report'
+            });
+        }
+        return {
+            ...project,
+            codeFiles: primaryFiles,
+            generationReport: nextReport,
+            deliveryTier: 'core',
+            partialEnhancement: true,
+            artUiApplied: false,
+            finishedPlayableReady: true,
+            workspaceNotice: nextReport.workspaceNotice,
+            skippedStages: nextReport.skippedStages,
+            __coreFallbackApplied: true
+        };
+    }
+
     async function ensureAIDirectProjectDeliveryReady(project, spec, productionPlan, productionBrief, activeModel, progress = null) {
         let candidate = project;
         let report = null;
@@ -10141,11 +10219,44 @@ Lock Game Type to "Bullet Hell / Flying Shooter" and genre to "bullet-hell".`
                 candidate.qualityTier = 'playable';
                 return candidate;
             }
+            if (attempt === 0) {
+                const coreFallback = buildCorePlayableFallbackProject(candidate, report);
+                if (coreFallback) {
+                    if (progress && progress.workfeedHandle) {
+                        updateChatWorkfeedStep(progress.workfeedHandle, 'self_test', {
+                            status: 'warning',
+                            summary: 'Enhanced polish did not pass self-test. Trying verified Core Playable...'
+                        });
+                        updateChatWorkfeedStep(progress.workfeedHandle, 'repair_interaction', {
+                            status: 'running',
+                            summary: 'Checking Core Playable fallback before model repair...'
+                        });
+                    }
+                    const fallbackReport = await runAIDirectInteractiveSelfTest(coreFallback, { allowLegacyFallback: false });
+                    applyInteractiveReportToProject(coreFallback, fallbackReport, 0);
+                    if (fallbackReport.ok) {
+                        if (progress && progress.workfeedHandle) {
+                            updateChatWorkfeedStep(progress.workfeedHandle, 'repair_interaction', {
+                                status: 'skipped',
+                                summary: 'Model repair skipped. Verified Core Playable was used.'
+                            });
+                            updateChatWorkfeedStep(progress.workfeedHandle, 'self_test', {
+                                status: 'done',
+                                summary: 'Core Playable verified after enhanced polish failed self-test.'
+                            });
+                        }
+                        coreFallback.deliveryReady = true;
+                        coreFallback.qualityTier = 'playable';
+                        return coreFallback;
+                    }
+                    report = fallbackReport;
+                }
+            }
             if (attempt === 0 && shouldTryRuntimeBridgeAdapterBeforeModelRepair(report)) {
                 if (progress && progress.workfeedHandle) {
                     updateChatWorkfeedStep(progress.workfeedHandle, 'repair_interaction', {
                         status: 'running',
-                    summary: 'Runtime controls need bridge stabilization. Applying runtime bridge adapter before model repair...'
+                        summary: 'Runtime controls need bridge stabilization. Applying runtime bridge adapter before model repair...'
                     });
                 }
                 const adaptedCandidate = applyRuntimeBridgeAdapterToProject(candidate, report);
@@ -10287,6 +10398,16 @@ Lock Game Type to "Bullet Hell / Flying Shooter" and genre to "bullet-hell".`
             },
             applyInteractiveReportToProjectForTest(project = {}, report = {}, repairAttempts = 0) {
                 return applyInteractiveReportToProject(project, report, repairAttempts);
+            },
+            async ensureAIDirectProjectDeliveryReadyForTest(project = {}, spec = {}) {
+                return ensureAIDirectProjectDeliveryReady(
+                    project,
+                    spec,
+                    {},
+                    '',
+                    { providerId: 'qwen', modelId: 'qwen-plus', label: 'Qwen Plus' },
+                    null
+                );
             },
             getFinishedPlayableGateStatusForProject(project = {}) {
                 return getFinishedPlayableGateStatus(project);
