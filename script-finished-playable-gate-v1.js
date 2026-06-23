@@ -9431,6 +9431,22 @@ Lock Game Type to "Bullet Hell / Flying Shooter" and genre to "bullet-hell".`
         return 'blocked';
     }
 
+    function shouldTryRuntimeBridgeAdapterBeforeModelRepair(report = {}) {
+        if (!report || report.ok) return false;
+        const failed = Array.isArray(report.failed) ? report.failed.map(item => String(item).toLowerCase()) : [];
+        const onlyRestartFailed = failed.length > 0 && failed.every(item => item === 'restart' || item === 'restartverified');
+        return Boolean(
+            report.rendered &&
+            report.bridgeDetected &&
+            report.startVerified &&
+            report.inputVerified &&
+            report.hudVerified &&
+            report.onboardingVerified &&
+            !report.restartVerified &&
+            (!failed.length || onlyRestartFailed)
+        );
+    }
+
     function getProjectInteractiveReport(project = {}) {
         return project.interactiveReport ||
             (project.validationReport && project.validationReport.interactiveReport) ||
@@ -9920,6 +9936,42 @@ Lock Game Type to "Bullet Hell / Flying Shooter" and genre to "bullet-hell".`
                 candidate.qualityTier = 'playable';
                 return candidate;
             }
+            if (attempt === 0 && shouldTryRuntimeBridgeAdapterBeforeModelRepair(report)) {
+                if (progress && progress.workfeedHandle) {
+                    updateChatWorkfeedStep(progress.workfeedHandle, 'repair_interaction', {
+                        status: 'running',
+                        summary: 'Restart needs bridge stabilization. Applying runtime bridge adapter before model repair...'
+                    });
+                }
+                const adaptedCandidate = applyRuntimeBridgeAdapterToProject(candidate, report);
+                if (adaptedCandidate && adaptedCandidate.runtimeBridgeAdapterApplied) {
+                    const adaptedReport = await runAIDirectInteractiveSelfTest(adaptedCandidate, {
+                        loadTimeoutMs: 3500
+                    });
+                    applyInteractiveReportToProject(adaptedCandidate, adaptedReport, attempt);
+                    if (adaptedReport.ok) {
+                        if (progress && progress.workfeedHandle) {
+                            updateChatWorkfeedStep(progress.workfeedHandle, 'restart_test', {
+                                status: 'done',
+                                summary: 'Restart verified with runtime bridge adapter.'
+                            });
+                            updateChatWorkfeedStep(progress.workfeedHandle, 'repair_interaction', {
+                                status: 'done',
+                                summary: 'Runtime bridge adapter verified Restart without model repair.'
+                            });
+                            updateChatWorkfeedStep(progress.workfeedHandle, 'self_test', {
+                                status: 'done',
+                                summary: 'Playable game verified with runtime bridge adapter.'
+                            });
+                        }
+                        adaptedCandidate.deliveryReady = true;
+                        adaptedCandidate.qualityTier = 'playable';
+                        return adaptedCandidate;
+                    }
+                    report = adaptedReport;
+                    candidate = adaptedCandidate;
+                }
+            }
             if (attempt >= maxRepairs) break;
             if (progress && progress.workfeedHandle) {
                 updateChatWorkfeedStep(progress.workfeedHandle, 'self_test', {
@@ -10054,6 +10106,9 @@ Lock Game Type to "Bullet Hell / Flying Shooter" and genre to "bullet-hell".`
             },
             getGenerationFailureWorkfeedStepForTest(error = {}) {
                 return getGenerationFailureWorkfeedStep(error);
+            },
+            shouldTryRuntimeBridgeAdapterBeforeModelRepairForTest(report = {}) {
+                return shouldTryRuntimeBridgeAdapterBeforeModelRepair(report);
             },
             applyAIDirectStreamEventsForTest(events = []) {
                 const api = getWorkfeedApi();
