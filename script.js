@@ -9336,6 +9336,80 @@ Lock Game Type to "Bullet Hell / Flying Shooter" and genre to "bullet-hell".`
         }
     }
 
+    function dispatchSelfTestKeyboard(win, doc, key = 'ArrowRight', code = key) {
+        try {
+            const init = { key, code, bubbles: true, cancelable: true };
+            win.dispatchEvent(new KeyboardEvent('keydown', init));
+            doc.dispatchEvent(new KeyboardEvent('keydown', init));
+            const canvas = doc.querySelector('canvas');
+            if (canvas) canvas.dispatchEvent(new KeyboardEvent('keydown', init));
+            win.dispatchEvent(new KeyboardEvent('keyup', init));
+            return true;
+        } catch (error) {
+            return false;
+        }
+    }
+
+    function dispatchSelfTestPointer(doc, mode = 'click') {
+        const canvas = doc && doc.querySelector ? doc.querySelector('canvas') : null;
+        if (!canvas || !canvas.getBoundingClientRect) return false;
+        try {
+            const rect = canvas.getBoundingClientRect();
+            const center = {
+                bubbles: true,
+                cancelable: true,
+                clientX: rect.left + rect.width / 2,
+                clientY: rect.top + rect.height / 2
+            };
+            const left = {
+                ...center,
+                clientX: rect.left + rect.width * 0.25
+            };
+            const right = {
+                ...center,
+                clientX: rect.left + rect.width * 0.75
+            };
+            if (mode === 'drag') {
+                canvas.dispatchEvent(new MouseEvent('pointerdown', left));
+                canvas.dispatchEvent(new MouseEvent('mousedown', left));
+                canvas.dispatchEvent(new MouseEvent('pointermove', right));
+                canvas.dispatchEvent(new MouseEvent('mousemove', right));
+                canvas.dispatchEvent(new MouseEvent('pointerup', right));
+                canvas.dispatchEvent(new MouseEvent('mouseup', right));
+                return true;
+            }
+            canvas.dispatchEvent(new MouseEvent('pointerdown', center));
+            canvas.dispatchEvent(new MouseEvent('mousedown', center));
+            canvas.dispatchEvent(new MouseEvent('click', center));
+            canvas.dispatchEvent(new MouseEvent('pointerup', center));
+            canvas.dispatchEvent(new MouseEvent('mouseup', center));
+            return true;
+        } catch (error) {
+            return false;
+        }
+    }
+
+    function clickSelfTestControl(doc, pattern) {
+        if (!doc || !doc.querySelectorAll) return false;
+        try {
+            const candidates = Array.from(doc.querySelectorAll('button,[role="button"],a,input[type="button"],input[type="submit"]'));
+            const target = candidates.find(element => {
+                const label = String(element.textContent || element.value || element.getAttribute('aria-label') || element.title || '').trim();
+                if (!pattern.test(label)) return false;
+                const rect = element.getBoundingClientRect && element.getBoundingClientRect();
+                const style = element.ownerDocument.defaultView && element.ownerDocument.defaultView.getComputedStyle
+                    ? element.ownerDocument.defaultView.getComputedStyle(element)
+                    : null;
+                return rect && rect.width > 0 && rect.height > 0 && (!style || (style.visibility !== 'hidden' && style.display !== 'none'));
+            });
+            if (!target) return false;
+            target.click();
+            return true;
+        } catch (error) {
+            return false;
+        }
+    }
+
     function getDocumentReadableText(doc) {
         if (!doc || !doc.body) return '';
         const chunks = [];
@@ -9703,6 +9777,10 @@ Lock Game Type to "Bullet Hell / Flying Shooter" and genre to "bullet-hell".`
             const beforeCanvas = canvasHashFromDocument(doc);
             const startResult = await callRuntimeBridge(bridge, 'start');
             rememberBridgeTimeout(startResult);
+            clickSelfTestControl(doc, /start|begin|play|brew|serve|launch|go/i);
+            dispatchSelfTestKeyboard(win, doc, 'Enter', 'Enter');
+            dispatchSelfTestKeyboard(win, doc, ' ', 'Space');
+            dispatchSelfTestPointer(doc, 'click');
             await waitForMs(800);
             const afterStartStateRaw = await callRuntimeBridge(bridge, 'getState');
             rememberBridgeTimeout(afterStartStateRaw);
@@ -9711,17 +9789,43 @@ Lock Game Type to "Bullet Hell / Flying Shooter" and genre to "bullet-hell".`
             const startDiff = getInteractiveStateDiff(beforeState, afterStartState);
             const startChanged = startDiff.length > 0 || beforeCanvas.hash !== afterStartCanvas.hash;
             report.startVerified = startChanged || afterStartState.status === 'running';
-            const inputResult = await callRuntimeBridge(bridge, 'dispatchInput', { key: 'ArrowRight', code: 'ArrowRight', type: 'keydown', direction: 'right' });
-            rememberBridgeTimeout(inputResult);
-            await waitForMs(650);
-            const afterInputStateRaw = await callRuntimeBridge(bridge, 'getState');
-            rememberBridgeTimeout(afterInputStateRaw);
-            const afterInputState = normalizeInteractiveState(afterInputStateRaw);
-            const afterInputCanvas = canvasHashFromDocument(doc);
-            const inputDiff = getInteractiveStateDiff(afterStartState, afterInputState);
+            const inputAttempts = [
+                { key: 'ArrowRight', code: 'ArrowRight', type: 'keydown', direction: 'right', label: 'arrow-right' },
+                { key: 'Enter', code: 'Enter', type: 'keydown', action: 'confirm', label: 'enter-confirm' },
+                { key: ' ', code: 'Space', type: 'keydown', action: 'primary', label: 'space-primary' },
+                { type: 'click', x: 0.5, y: 0.5, action: 'select', label: 'canvas-click' },
+                { type: 'pointer', action: 'drag', from: { x: 0.25, y: 0.5 }, to: { x: 0.75, y: 0.5 }, label: 'canvas-drag' },
+                { type: 'select', value: 'first', action: 'choose', label: 'select-first' }
+            ];
+            let afterInputState = afterStartState;
+            let afterInputCanvas = afterStartCanvas;
+            let inputDiff = [];
+            let inputAttemptLabel = '';
+            for (const attempt of inputAttempts) {
+                const inputResult = await callRuntimeBridge(bridge, 'dispatchInput', attempt);
+                rememberBridgeTimeout(inputResult);
+                if (attempt.type === 'click') dispatchSelfTestPointer(doc, 'click');
+                else if (attempt.type === 'pointer') dispatchSelfTestPointer(doc, 'drag');
+                else dispatchSelfTestKeyboard(win, doc, attempt.key || 'ArrowRight', attempt.code || attempt.key || 'ArrowRight');
+                await waitForMs(420);
+                const nextInputStateRaw = await callRuntimeBridge(bridge, 'getState');
+                rememberBridgeTimeout(nextInputStateRaw);
+                const nextInputState = normalizeInteractiveState(nextInputStateRaw);
+                const nextInputCanvas = canvasHashFromDocument(doc);
+                const nextInputDiff = getInteractiveStateDiff(afterInputState, nextInputState);
+                afterInputState = nextInputState;
+                afterInputCanvas = nextInputCanvas;
+                inputDiff = nextInputDiff;
+                if (nextInputDiff.length > 0 || afterStartCanvas.hash !== nextInputCanvas.hash) {
+                    inputAttemptLabel = attempt.label || attempt.type || attempt.key || 'input';
+                    break;
+                }
+            }
             report.inputVerified = inputDiff.length > 0 || afterStartCanvas.hash !== afterInputCanvas.hash;
             const restartResult = await callRuntimeBridge(bridge, 'restart');
             rememberBridgeTimeout(restartResult);
+            clickSelfTestControl(doc, /restart|reset|again|retry|replay/i);
+            dispatchSelfTestKeyboard(win, doc, 'r', 'KeyR');
             await waitForMs(650);
             const afterRestartStateRaw = await callRuntimeBridge(bridge, 'getState');
             rememberBridgeTimeout(afterRestartStateRaw);
@@ -9737,6 +9841,7 @@ Lock Game Type to "Bullet Hell / Flying Shooter" and genre to "bullet-hell".`
                 startChanged: startDiff,
                 inputChanged: inputDiff,
                 restartChanged: restartDiff,
+                inputAttempt: inputAttemptLabel,
                 capabilities: afterInputState.capabilities || afterStartState.capabilities || beforeState.capabilities || {}
             };
             report.ok = Boolean(report.rendered && bridgeComplete && report.startVerified && report.inputVerified && report.restartVerified && report.hudVerified && report.onboardingVerified && !report.fatalErrors.length);
